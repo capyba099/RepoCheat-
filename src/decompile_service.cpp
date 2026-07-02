@@ -74,6 +74,10 @@ DecompileFileResult decompile_to_file(const DecompileRequest& request) {
         out.flush();
 
         CliMetadata metadata(pe);
+        out << "// csdecomp: metadata: types=" << metadata.type_defs().size()
+            << " methods=" << metadata.method_defs().size()
+            << " typerefs=" << metadata.type_refs().size() << "\n";
+        out.flush();
         out << "// csdecomp: decompiling types\n";
         out.flush();
 

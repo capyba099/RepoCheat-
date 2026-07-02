@@ -127,7 +127,11 @@ public:
 
 private:
     void parse_metadata_root();
-    void parse_tables();
+    void read_tables_header();
+    void clear_parsed_tables();
+    bool parse_tables_with_heap_sizes(uint8_t heap_sizes);
+    size_t score_method_rvas() const;
+
     void read_table_rows(TableId id, size_t row_count);
 
     uint32_t coded_index_size(uint32_t max_rows, uint32_t tag_bits) const;
@@ -153,6 +157,9 @@ private:
     std::vector<uint32_t> row_counts_;
     std::vector<uint32_t> table_row_sizes_;
     std::vector<uint32_t> table_offsets_;
+    uint64_t tables_valid_{0};
+    size_t tables_start_{0};
+    uint8_t tables_heap_sizes_declared_{0};
     uint32_t string_index_size_{2};
     uint32_t blob_index_size_{2};
     uint32_t guid_index_size_{2};

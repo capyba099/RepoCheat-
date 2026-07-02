@@ -51,6 +51,19 @@ std::string arg_name(uint32_t index, bool is_static, const std::vector<std::stri
 
 std::string local_name(uint32_t index) { return "loc" + std::to_string(index); }
 
+std::string method_display_name(const std::string& name, size_t method_index) {
+    if (name.empty()) {
+        return "Method_" + std::to_string(method_index + 1);
+    }
+    if (name == ".ctor") {
+        return name;
+    }
+    if (name == ".cctor") {
+        return name;
+    }
+    return name;
+}
+
 int32_t branch_target(int32_t operand, size_t insn_offset) {
     return static_cast<int32_t>(insn_offset) + operand;
 }
@@ -166,6 +179,7 @@ std::string Decompiler::decompile_method(size_t method_def_index, size_t type_de
     const auto& method = metadata_.method_defs()[method_def_index];
     const auto signature = metadata_.decode_method_signature(method.signature_index);
     const auto param_indices = metadata_.params_for_method(method_def_index);
+    const std::string method_name = method_display_name(metadata_.get_string(method.name_index), method_def_index);
 
     std::vector<std::string> param_names;
     param_names.reserve(signature.param_types.size());
@@ -186,7 +200,7 @@ std::string Decompiler::decompile_method(size_t method_def_index, size_t type_de
 
     std::ostringstream out;
     out << indent(1) << format_method_flags(method.flags) << signature.return_type << " "
-        << metadata_.get_string(method.name_index) << "(";
+        << method_name << "(";
 
     for (size_t i = 0; i < signature.param_types.size(); ++i) {
         if (i > 0) {

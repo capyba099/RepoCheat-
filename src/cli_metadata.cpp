@@ -65,7 +65,206 @@ uint32_t read_compressed_uint(const uint8_t* data, size_t size, size_t& offset) 
 
 CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
     parse_metadata_root();
-    parse_tables();
+    read_tables_header();
+
+    uint8_t best_heap = tables_heap_sizes_declared_;
+    size_t best_score = 0;
+    for (int mask = 0; mask < 8; ++mask) {
+        const uint8_t heap_sizes = static_cast<uint8_t>(mask & 0x07);
+        clear_parsed_tables();
+        if (!parse_tables_with_heap_sizes(heap_sizes)) {
+            continue;
+        }
+        const size_t score = score_method_rvas();
+        if (score > best_score) {
+            best_score = score;
+            best_heap = heap_sizes;
+        }
+    }
+
+    clear_parsed_tables();
+    if (!parse_tables_with_heap_sizes(best_heap)) {
+        throw std::runtime_error("failed to parse metadata tables");
+    }
+}
+
+void CliMetadata::read_tables_header() {
+    BinaryReader reader(tables_data_);
+    reader.skip(4);
+    reader.skip(2);
+    tables_heap_sizes_declared_ = reader.read_u8();
+    reader.skip(1);
+    tables_valid_ = reader.read_u64();
+    reader.skip(8);
+
+    row_counts_.assign(64, 0);
+    for (int i = 0; i < 64; ++i) {
+        if (((tables_valid_ >> i) & 1ULL) != 0) {
+            row_counts_[i] = reader.read_u32();
+        }
+    }
+    tables_start_ = reader.position();
+}
+
+void CliMetadata::clear_parsed_tables() {
+    method_defs_.clear();
+    type_defs_.clear();
+    fields_.clear();
+    params_.clear();
+    member_refs_.clear();
+    type_refs_.clear();
+    type_specs_.clear();
+    nested_classes_.clear();
+    valid_tables_.clear();
+    table_row_sizes_.clear();
+    table_offsets_.clear();
+}
+
+size_t CliMetadata::score_method_rvas() const {
+    if (method_defs_.empty()) {
+        return type_defs_.empty() ? 0 : 1;
+    }
+
+    size_t checked = 0;
+    size_t valid = 0;
+    const size_t image_limit = pe_.raw().size() + 0x100000;
+
+    for (const auto& method : method_defs_) {
+        if (method.rva == 0) {
+            continue;
+        }
+        ++checked;
+        if (method.rva >= image_limit) {
+            continue;
+        }
+        try {
+            if (pe_.max_read_size_at_rva(method.rva) > 0) {
+                ++valid;
+            }
+        } catch (const std::exception&) {
+        }
+        if (checked >= 64) {
+            break;
+        }
+    }
+
+    if (checked == 0) {
+        return 1;
+    }
+    return valid;
+}
+
+bool CliMetadata::parse_tables_with_heap_sizes(uint8_t heap_sizes) {
+    try {
+        string_index_size_ = (heap_sizes & 0x01) != 0 ? 4U : 2U;
+        blob_index_size_ = (heap_sizes & 0x02) != 0 ? 4U : 2U;
+        guid_index_size_ = (heap_sizes & 0x04) != 0 ? 4U : 2U;
+
+        const auto str_idx = string_index_size_;
+        const auto blob_idx = blob_index_size_;
+        const auto guid_idx = guid_index_size_;
+
+        const auto simple = [&](uint32_t table) { return simple_index_size(row_counts_[table]); };
+        const auto coded = [&](std::initializer_list<int> tables, uint32_t tag_bits) {
+            return coded_index_size(max_row_count(tables), tag_bits);
+        };
+
+        table_row_sizes_.assign(64, 0);
+        table_offsets_.assign(64, 0);
+
+        auto set_row_size = [&](int table, uint32_t size) { table_row_sizes_[table] = size; };
+
+        set_row_size(0, 2 + str_idx + guid_idx * 3);
+        set_row_size(1, coded({0, 26, 35, 1}, 2) + str_idx + str_idx);
+        set_row_size(2, 4 + str_idx + str_idx + coded({2, 1, 27}, 2) + simple(4) + simple(6));
+        set_row_size(3, simple(4));
+        set_row_size(4, 2 + str_idx + blob_idx);
+        set_row_size(5, simple(6));
+        set_row_size(6, 4 + 2 + 2 + str_idx + blob_idx + simple(8));
+        set_row_size(7, simple(8));
+        set_row_size(8, 2 + 2 + str_idx);
+        set_row_size(9, simple(2) + coded({2, 1, 27}, 2));
+        set_row_size(10, coded({2, 1, 26, 6, 27}, 3) + str_idx + blob_idx);
+        set_row_size(11, 2 + coded({4, 8, 23}, 2) + blob_idx);
+        set_row_size(12, coded({6, 4, 1, 2, 8, 9, 10, 0, 14, 23, 20, 17, 26, 27, 32, 35, 38, 39, 40}, 5) +
+                            coded({1, 2, 6, 10}, 2) + blob_idx);
+        set_row_size(13, coded({4, 8}, 1) + blob_idx);
+        set_row_size(14, 2 + coded({2, 6, 32}, 2) + blob_idx);
+        set_row_size(15, 2 + 4 + simple(2));
+        set_row_size(16, 4 + simple(4));
+        set_row_size(17, blob_idx);
+        set_row_size(18, simple(2) + simple(20));
+        set_row_size(19, simple(20));
+        set_row_size(20, 2 + str_idx + coded({2, 1, 27}, 2));
+        set_row_size(21, simple(2) + simple(23));
+        set_row_size(22, simple(23));
+        set_row_size(23, 2 + str_idx + blob_idx);
+        set_row_size(24, 2 + simple(6) + coded({20, 23}, 1));
+        set_row_size(25, simple(2) + coded({6, 10}, 1) + coded({6, 10}, 1));
+        set_row_size(26, str_idx);
+        set_row_size(27, blob_idx);
+        set_row_size(28, 2 + coded({4, 6}, 1) + str_idx + simple(26));
+        set_row_size(29, 4 + simple(4));
+        set_row_size(30, 4 + 4);
+        set_row_size(31, 4);
+        set_row_size(32, 4 + 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx);
+        set_row_size(33, 4);
+        set_row_size(34, 4 + 4 + 4);
+        set_row_size(35, 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx + blob_idx);
+        set_row_size(36, 4 + simple(35));
+        set_row_size(37, 4 + 4 + 4 + simple(35));
+        set_row_size(38, 4 + str_idx + blob_idx);
+        set_row_size(39, 4 + 4 + str_idx + str_idx + coded({38, 35, 39}, 2));
+        set_row_size(40, 4 + 4 + str_idx + coded({38, 35, 39}, 2));
+        set_row_size(41, simple(2) + simple(2));
+        set_row_size(42, 2 + 2 + str_idx + coded({2, 6}, 1));
+        set_row_size(43, coded({6, 10}, 1) + blob_idx);
+        set_row_size(44, simple(42) + coded({2, 1, 27}, 2));
+        set_row_size(48, blob_idx + guid_idx + blob_idx + guid_idx);
+        set_row_size(49, simple(48) + blob_idx);
+        set_row_size(50, simple(6) + simple(53) + simple(51) + simple(52) + 4 + 4);
+        set_row_size(51, 2 + 2 + str_idx);
+        set_row_size(52, str_idx + blob_idx);
+        set_row_size(53, simple(53) + blob_idx);
+        set_row_size(54, simple(6) + simple(6));
+        set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 3) + guid_idx + blob_idx);
+
+        const size_t available_table_bytes = tables_data_.size() - tables_start_;
+        size_t offset = 0;
+        for (int i = 0; i < 64; ++i) {
+            if (((tables_valid_ >> i) & 1ULL) != 0) {
+                if (row_counts_[i] > kMaxMetadataTableRows) {
+                    return false;
+                }
+                if (row_counts_[i] > 0 && table_row_sizes_[i] == 0) {
+                    return false;
+                }
+                table_offsets_[i] = static_cast<uint32_t>(offset);
+                const size_t table_bytes =
+                    static_cast<size_t>(table_row_sizes_[i]) * static_cast<size_t>(row_counts_[i]);
+                if (table_bytes > available_table_bytes - offset) {
+                    return false;
+                }
+                offset += table_bytes;
+            }
+        }
+
+        if (offset > available_table_bytes) {
+            return false;
+        }
+
+        valid_tables_.assign(tables_data_.begin() + tables_start_,
+                             tables_data_.begin() + tables_start_ + offset);
+
+        for (int i = 0; i < 64; ++i) {
+            if (((tables_valid_ >> i) & 1ULL) != 0 && row_counts_[i] > 0) {
+                read_table_rows(static_cast<TableId>(i), row_counts_[i]);
+            }
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 void CliMetadata::parse_metadata_root() {
@@ -124,138 +323,6 @@ void CliMetadata::parse_metadata_root() {
     }
     if (strings_heap_.empty() || blob_heap_.empty()) {
         throw std::runtime_error("required metadata heaps are missing");
-    }
-}
-
-void CliMetadata::parse_tables() {
-    BinaryReader reader(tables_data_);
-    reader.skip(4);
-    reader.skip(2);
-    const uint8_t heap_sizes = reader.read_u8();
-    const bool string_index_size = (heap_sizes & 0x01) != 0;
-    const bool blob_index_size = (heap_sizes & 0x02) != 0;
-    const bool guid_index_size = (heap_sizes & 0x04) != 0;
-    string_index_size_ = string_index_size ? 4U : 2U;
-    blob_index_size_ = blob_index_size ? 4U : 2U;
-    guid_index_size_ = guid_index_size ? 4U : 2U;
-    reader.skip(1);
-    const uint64_t valid = reader.read_u64();
-    reader.skip(8);
-
-    row_counts_.assign(64, 0);
-    for (int i = 0; i < 64; ++i) {
-        if (((valid >> i) & 1ULL) != 0) {
-            row_counts_[i] = reader.read_u32();
-        }
-    }
-
-    const auto str_idx = string_index_size_;
-    const auto blob_idx = blob_index_size_;
-    const auto guid_idx = guid_index_size_;
-
-    const auto simple = [&](uint32_t table) { return simple_index_size(row_counts_[table]); };
-    const auto coded = [&](std::initializer_list<int> tables, uint32_t tag_bits) {
-        return coded_index_size(max_row_count(tables), tag_bits);
-    };
-
-    table_row_sizes_.assign(64, 0);
-    table_offsets_.assign(64, 0);
-
-    const size_t tables_start = reader.position();
-
-    auto set_row_size = [&](int table, uint32_t size) { table_row_sizes_[table] = size; };
-
-    // ECMA-335 II.22 — row sizes for every table (missing entries caused offset drift).
-    set_row_size(0, 2 + str_idx + guid_idx * 3);  // Module
-    set_row_size(1, coded({0, 26, 35, 1}, 2) + str_idx + str_idx);  // TypeRef
-    set_row_size(2, 4 + str_idx + str_idx + coded({2, 1, 27}, 2) + simple(4) + simple(6));  // TypeDef
-    set_row_size(3, simple(4));  // FieldPtr
-    set_row_size(4, 2 + str_idx + blob_idx);  // Field
-    set_row_size(5, simple(6));  // MethodPtr
-    set_row_size(6, 4 + 2 + 2 + str_idx + blob_idx + simple(8));  // MethodDef
-    set_row_size(7, simple(8));  // ParamPtr
-    set_row_size(8, 2 + 2 + str_idx);  // Param
-    set_row_size(9, simple(2) + coded({2, 1, 27}, 2));  // InterfaceImpl
-    set_row_size(10, coded({2, 1, 26, 6, 27}, 3) + str_idx + blob_idx);  // MemberRef
-    set_row_size(11, 2 + coded({4, 8, 23}, 2) + blob_idx);  // Constant
-    set_row_size(12, coded({6, 4, 1, 2, 8, 9, 10, 0, 14, 23, 20, 17, 26, 27, 32, 35, 38, 39, 40}, 5) +
-                        coded({1, 2, 6, 10}, 2) + blob_idx);  // CustomAttribute
-    set_row_size(13, coded({4, 8}, 1) + blob_idx);  // FieldMarshal
-    set_row_size(14, 2 + coded({2, 6, 32}, 2) + blob_idx);  // DeclSecurity
-    set_row_size(15, 2 + 4 + simple(2));  // ClassLayout
-    set_row_size(16, 4 + simple(4));  // FieldLayout
-    set_row_size(17, blob_idx);  // StandAloneSig
-    set_row_size(18, simple(2) + simple(20));  // EventMap
-    set_row_size(19, simple(20));  // EventPtr
-    set_row_size(20, 2 + str_idx + coded({2, 1, 27}, 2));  // Event
-    set_row_size(21, simple(2) + simple(23));  // PropertyMap
-    set_row_size(22, simple(23));  // PropertyPtr
-    set_row_size(23, 2 + str_idx + blob_idx);  // Property
-    set_row_size(24, 2 + simple(6) + coded({20, 23}, 1));  // MethodSemantics
-    set_row_size(25, simple(2) + coded({6, 10}, 1) + coded({6, 10}, 1));  // MethodImpl
-    set_row_size(26, str_idx);  // ModuleRef
-    set_row_size(27, blob_idx);  // TypeSpec
-    set_row_size(28, 2 + coded({4, 6}, 1) + str_idx + simple(26));  // ImplMap
-    set_row_size(29, 4 + simple(4));  // FieldRva
-    set_row_size(30, 4 + 4);  // EncLog
-    set_row_size(31, 4);  // EncMap
-    set_row_size(32, 4 + 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx);  // Assembly
-    set_row_size(33, 4);  // AssemblyProcessor
-    set_row_size(34, 4 + 4 + 4);  // AssemblyOS
-    set_row_size(35, 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx + blob_idx);  // AssemblyRef
-    set_row_size(36, 4 + simple(35));  // AssemblyRefProcessor
-    set_row_size(37, 4 + 4 + 4 + simple(35));  // AssemblyRefOS
-    set_row_size(38, 4 + str_idx + blob_idx);  // File
-    set_row_size(39, 4 + 4 + str_idx + str_idx + coded({38, 35, 39}, 2));  // ExportedType
-    set_row_size(40, 4 + 4 + str_idx + coded({38, 35, 39}, 2));  // ManifestResource
-    set_row_size(41, simple(2) + simple(2));  // NestedClass
-    set_row_size(42, 2 + 2 + str_idx + coded({2, 6}, 1));  // GenericParam
-    set_row_size(43, coded({6, 10}, 1) + blob_idx);  // MethodSpec
-    set_row_size(44, simple(42) + coded({2, 1, 27}, 2));  // GenericParamConstraint
-    // Portable PDB debug tables (0x30–0x37)
-    set_row_size(48, guid_idx + str_idx + blob_idx);  // Document
-    set_row_size(49, simple(48) + blob_idx);  // MethodDebugInformation
-    set_row_size(50, simple(6) + simple(53) + simple(51) + simple(52) + 4 + 4);  // LocalScope
-    set_row_size(51, 2 + 2 + str_idx);  // LocalVariable
-    set_row_size(52, str_idx + blob_idx);  // LocalConstant
-    set_row_size(53, simple(53) + blob_idx);  // ImportScope
-    set_row_size(54, simple(6) + simple(49));  // StateMachineMethod
-    set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 3) + blob_idx);  // CustomDebugInformation
-
-    const size_t available_table_bytes = tables_data_.size() - tables_start;
-    size_t offset = 0;
-    for (int i = 0; i < 64; ++i) {
-        if (((valid >> i) & 1ULL) != 0) {
-            if (row_counts_[i] > kMaxMetadataTableRows) {
-                throw std::runtime_error("metadata table 0x" + std::to_string(i) + " has too many rows");
-            }
-            if (row_counts_[i] > 0 && table_row_sizes_[i] == 0) {
-                throw std::runtime_error("unsupported metadata table 0x" +
-                                         std::to_string(i) + " is present");
-            }
-            table_offsets_[i] = static_cast<uint32_t>(offset);
-            const size_t table_bytes =
-                static_cast<size_t>(table_row_sizes_[i]) * static_cast<size_t>(row_counts_[i]);
-            if (table_bytes > available_table_bytes - offset) {
-                throw std::runtime_error("metadata table 0x" + std::to_string(i) +
-                                         " exceeds #~ stream size");
-            }
-            offset += table_bytes;
-        }
-    }
-
-    if (offset > available_table_bytes) {
-        throw std::runtime_error("metadata tables exceed #~ stream size");
-    }
-
-    reader.seek(tables_start + offset);
-    valid_tables_.assign(tables_data_.begin() + tables_start,
-                         tables_data_.begin() + tables_start + offset);
-
-    for (int i = 0; i < 64; ++i) {
-        if (((valid >> i) & 1ULL) != 0 && row_counts_[i] > 0) {
-            read_table_rows(static_cast<TableId>(i), row_counts_[i]);
-        }
     }
 }
 
@@ -673,7 +740,7 @@ std::string CliMetadata::resolve_type_encoded(uint32_t encoded, int depth,
         typespec_visit.erase(index);
         return resolved;
     }
-    return "Type?" + std::to_string(encoded);
+    return "object";
 }
 
 std::string CliMetadata::resolve_type_name(uint32_t coded_index) const {
