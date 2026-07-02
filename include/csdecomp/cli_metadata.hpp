@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace csdecomp {
@@ -136,8 +136,12 @@ private:
     uint32_t decode_coded_index(uint32_t coded, uint32_t tag_bits) const;
 
     std::string decode_type_signature(const uint8_t* data, size_t size, size_t& offset) const;
+    std::string decode_type_signature(const uint8_t* data, size_t size, size_t& offset, int depth,
+                                      std::unordered_set<uint32_t>& typespec_visit) const;
     std::string decode_type_name_from_blob(const uint8_t* data, size_t size, size_t& offset) const;
     std::string resolve_type_encoded(uint32_t encoded) const;
+    std::string resolve_type_encoded(uint32_t encoded, int depth,
+                                     std::unordered_set<uint32_t>& typespec_visit) const;
 
     const PeReader& pe_;
     std::vector<uint8_t> strings_heap_;

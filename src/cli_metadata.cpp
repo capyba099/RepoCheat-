@@ -7,10 +7,13 @@
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace csdecomp {
 
 namespace {
+
+constexpr int kMaxTypeSignatureDepth = 48;
 
 uint32_t read_compressed_uint(const uint8_t* data, size_t size, size_t& offset) {
     if (offset >= size) {
@@ -361,7 +364,18 @@ std::string CliMetadata::get_user_string(uint32_t offset) const {
     return result;
 }
 
-std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size, size_t& offset) const {
+std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size,
+                                               size_t& offset) const {
+    std::unordered_set<uint32_t> typespec_visit;
+    return decode_type_signature(data, size, offset, 0, typespec_visit);
+}
+
+std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size, size_t& offset,
+                                               int depth,
+                                               std::unordered_set<uint32_t>& typespec_visit) const {
+    if (depth > kMaxTypeSignatureDepth) {
+        return "...";
+    }
     if (offset >= size) {
         return "void";
     }
@@ -398,25 +412,25 @@ std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size,
         case 0x11:
         case 0x12: {
             const uint32_t encoded = read_compressed_uint(data, size, offset);
-            return resolve_type_encoded(encoded);
+            return resolve_type_encoded(encoded, depth + 1, typespec_visit);
         }
         case 0x13: {
             const uint32_t index = read_compressed_uint(data, size, offset);
             return "T" + std::to_string(index);
         }
         case 0x1D: {
-            std::string element = decode_type_signature(data, size, offset);
+            std::string element = decode_type_signature(data, size, offset, depth + 1, typespec_visit);
             return element + "[]";
         }
         case 0x15: {
-            std::string base_type = decode_type_signature(data, size, offset);
+            std::string base_type = decode_type_signature(data, size, offset, depth + 1, typespec_visit);
             const uint32_t argc = read_compressed_uint(data, size, offset);
             base_type += "<";
             for (uint32_t i = 0; i < argc; ++i) {
                 if (i > 0) {
                     base_type += ", ";
                 }
-                base_type += decode_type_signature(data, size, offset);
+                base_type += decode_type_signature(data, size, offset, depth + 1, typespec_visit);
             }
             base_type += ">";
             return base_type;
@@ -477,38 +491,56 @@ std::string CliMetadata::decode_type_name_from_blob(const uint8_t* data, size_t 
 
 MethodSignature CliMetadata::decode_method_signature(uint32_t blob_index) const {
     MethodSignature signature;
-    const auto blob = get_blob(blob_index);
-    if (blob.empty()) {
-        signature.return_type = "void";
-        return signature;
-    }
+    signature.return_type = "void";
+    try {
+        const auto blob = get_blob(blob_index);
+        if (blob.empty()) {
+            return signature;
+        }
 
-    size_t offset = 0;
-    const uint8_t calling = blob[offset++];
-    signature.default_calling_convention = (calling & 0x0F) == 0x00;
-    signature.has_this = (calling & 0x20) != 0;
-    signature.explicit_this = (calling & 0x40) != 0;
-    signature.param_count = read_compressed_uint(blob.data(), blob.size(), offset);
-    signature.return_type = decode_type_signature(blob.data(), blob.size(), offset);
-    for (uint32_t i = 0; i < signature.param_count; ++i) {
-        signature.param_types.push_back(decode_type_signature(blob.data(), blob.size(), offset));
+        size_t offset = 0;
+        const uint8_t calling = blob[offset++];
+        signature.default_calling_convention = (calling & 0x0F) == 0x00;
+        signature.has_this = (calling & 0x20) != 0;
+        signature.explicit_this = (calling & 0x40) != 0;
+        signature.param_count = read_compressed_uint(blob.data(), blob.size(), offset);
+        signature.return_type = decode_type_signature(blob.data(), blob.size(), offset);
+        for (uint32_t i = 0; i < signature.param_count; ++i) {
+            signature.param_types.push_back(decode_type_signature(blob.data(), blob.size(), offset));
+        }
+    } catch (const std::exception&) {
+        signature.param_types.clear();
+        signature.return_type = "object";
     }
     return signature;
 }
 
 FieldSignature CliMetadata::decode_field_signature(uint32_t blob_index) const {
     FieldSignature signature;
-    const auto blob = get_blob(blob_index);
-    if (blob.size() < 2) {
+    signature.type_name = "object";
+    try {
+        const auto blob = get_blob(blob_index);
+        if (blob.size() < 2) {
+            return signature;
+        }
+        size_t offset = 1;
+        signature.type_name = decode_type_signature(blob.data(), blob.size(), offset);
+    } catch (const std::exception&) {
         signature.type_name = "object";
-        return signature;
     }
-    size_t offset = 1;
-    signature.type_name = decode_type_signature(blob.data(), blob.size(), offset);
     return signature;
 }
 
 std::string CliMetadata::resolve_type_encoded(uint32_t encoded) const {
+    std::unordered_set<uint32_t> typespec_visit;
+    return resolve_type_encoded(encoded, 0, typespec_visit);
+}
+
+std::string CliMetadata::resolve_type_encoded(uint32_t encoded, int depth,
+                                               std::unordered_set<uint32_t>& typespec_visit) const {
+    if (depth > kMaxTypeSignatureDepth) {
+        return "...";
+    }
     const uint32_t tag = encoded & 0x3;
     const uint32_t index = encoded >> 2;
     if (index == 0) {
@@ -537,12 +569,20 @@ std::string CliMetadata::resolve_type_encoded(uint32_t encoded) const {
         if (index == 0 || index > type_specs_.size()) {
             return "TypeSpec?" + std::to_string(index);
         }
+        if (typespec_visit.count(index) != 0) {
+            return "TypeSpec/*cycle*/";
+        }
+        typespec_visit.insert(index);
         const auto blob = get_blob(type_specs_[index - 1].signature_index);
         if (blob.empty()) {
+            typespec_visit.erase(index);
             return "TypeSpec?" + std::to_string(index);
         }
         size_t inner = 0;
-        return decode_type_signature(blob.data(), blob.size(), inner);
+        const std::string resolved =
+            decode_type_signature(blob.data(), blob.size(), inner, depth + 1, typespec_visit);
+        typespec_visit.erase(index);
+        return resolved;
     }
     return "Type?" + std::to_string(encoded);
 }

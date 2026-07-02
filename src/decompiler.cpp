@@ -73,8 +73,12 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
             }
         }
         if (!is_nested) {
-            decompile_type(out, i, options);
-            out << "\n";
+            try {
+                decompile_type(out, i, options);
+                out << "\n";
+            } catch (const std::exception& ex) {
+                out << "// Failed to decompile type #" << i << ": " << ex.what() << "\n\n";
+            }
         }
     }
 }
@@ -98,19 +102,31 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
     out << "\n" << indent(indent_level) << "{\n";
 
     for (const size_t field_index : metadata_.fields_for_type(type_def_index)) {
-        const auto& field = metadata_.fields()[field_index];
-        const auto sig = metadata_.decode_field_signature(field.signature_index);
-        out << indent(indent_level + 1) << format_field_flags(field.flags) << sig.type_name << " "
-            << metadata_.get_string(field.name_index) << ";\n";
+        try {
+            const auto& field = metadata_.fields()[field_index];
+            const auto sig = metadata_.decode_field_signature(field.signature_index);
+            out << indent(indent_level + 1) << format_field_flags(field.flags) << sig.type_name << " "
+                << metadata_.get_string(field.name_index) << ";\n";
+        } catch (const std::exception& ex) {
+            out << indent(indent_level + 1) << "// Failed to decompile field: " << ex.what() << "\n";
+        }
     }
 
     for (const size_t method_index : metadata_.methods_for_type(type_def_index)) {
-        out << decompile_method(method_index, type_def_index, options);
+        try {
+            out << decompile_method(method_index, type_def_index, options);
+        } catch (const std::exception& ex) {
+            out << indent(indent_level + 1) << "// Failed to decompile method: " << ex.what() << "\n\n";
+        }
     }
 
     for (const size_t nested_index : metadata_.nested_types_for_type(type_def_index)) {
-        const uint32_t nested_type = metadata_.nested_classes()[nested_index].nested_class_index - 1;
-        decompile_type(out, nested_type, options);
+        try {
+            const uint32_t nested_type = metadata_.nested_classes()[nested_index].nested_class_index - 1;
+            decompile_type(out, nested_type, options);
+        } catch (const std::exception& ex) {
+            out << indent(indent_level + 1) << "// Failed to decompile nested type: " << ex.what() << "\n";
+        }
     }
 
     out << indent(indent_level) << "}\n";

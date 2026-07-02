@@ -12,11 +12,15 @@
 
 #include "csdecomp/decompile_service.hpp"
 
+#include <memory>
 #include <string>
 
 namespace csdecomp {
 
 namespace {
+
+constexpr UINT WM_DECOMPILE_DONE = WM_APP + 1;
+constexpr UINT WM_DECOMPILE_ERROR = WM_APP + 2;
 
 constexpr int kInputEditId = 1001;
 constexpr int kInputBrowseId = 1002;
@@ -38,6 +42,67 @@ HWND g_output_edit = nullptr;
 HWND g_il_comments = nullptr;
 HWND g_status_edit = nullptr;
 HFONT g_ui_font = nullptr;
+HANDLE g_worker_thread = nullptr;
+
+struct DecompileWorkerPayload {
+    DecompileRequest request;
+    std::wstring output_path;
+};
+
+std::wstring utf8_to_wide(const std::string& text);
+void set_status(const std::wstring& text);
+void set_ui_busy(bool busy);
+void on_decompile_done(std::wstring* message);
+void on_decompile_error(std::wstring* message);
+
+void set_ui_busy(bool busy) {
+    const BOOL enable = busy ? FALSE : TRUE;
+    EnableWindow(GetDlgItem(g_window, kDecompileId), enable);
+    EnableWindow(GetDlgItem(g_window, kInputBrowseId), enable);
+    EnableWindow(GetDlgItem(g_window, kOutputBrowseId), enable);
+    EnableWindow(g_input_edit, enable);
+    EnableWindow(g_output_edit, enable);
+    EnableWindow(g_il_comments, enable);
+}
+
+DWORD WINAPI decompile_worker_thread(LPVOID param) {
+    auto* payload = static_cast<DecompileWorkerPayload*>(param);
+    try {
+        decompile_to_file(payload->request);
+        auto* message = new std::wstring(L"Saved to:\n" + payload->output_path);
+        PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(message));
+    } catch (const std::exception& ex) {
+        auto* message = new std::wstring(utf8_to_wide(ex.what()));
+        PostMessageW(g_window, WM_DECOMPILE_ERROR, 0, reinterpret_cast<LPARAM>(message));
+    } catch (...) {
+        auto* message = new std::wstring(L"Unknown error during decompilation.");
+        PostMessageW(g_window, WM_DECOMPILE_ERROR, 0, reinterpret_cast<LPARAM>(message));
+    }
+    delete payload;
+    return 0;
+}
+
+void on_decompile_done(std::wstring* message) {
+    set_ui_busy(false);
+    if (g_worker_thread != nullptr) {
+        CloseHandle(g_worker_thread);
+        g_worker_thread = nullptr;
+    }
+    set_status(L"Done.");
+    MessageBoxW(g_window, message->c_str(), L"csdecomp", MB_ICONINFORMATION | MB_OK);
+    delete message;
+}
+
+void on_decompile_error(std::wstring* message) {
+    set_ui_busy(false);
+    if (g_worker_thread != nullptr) {
+        CloseHandle(g_worker_thread);
+        g_worker_thread = nullptr;
+    }
+    set_status(L"Error.");
+    MessageBoxW(g_window, message->c_str(), L"csdecomp", MB_ICONERROR | MB_OK);
+    delete message;
+}
 
 std::wstring utf8_to_wide(const std::string& text) {
     if (text.empty()) {
@@ -197,6 +262,11 @@ void on_browse_output() {
 }
 
 void on_decompile() {
+    if (g_worker_thread != nullptr) {
+        MessageBoxW(g_window, L"Decompilation is already in progress.", L"csdecomp", MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
     const std::wstring input_wide = get_window_text(g_input_edit);
     if (input_wide.empty()) {
         MessageBoxW(g_window, L"Select a .NET assembly (.dll or .exe).", L"csdecomp",
@@ -210,24 +280,21 @@ void on_decompile() {
         set_window_text(g_output_edit, output_wide);
     }
 
-    DecompileRequest request;
-    request.input_path = wide_to_utf8(input_wide);
-    request.output_path = wide_to_utf8(output_wide);
-    request.options.include_il_comments =
+    auto* payload = new DecompileWorkerPayload{};
+    payload->request.input_path = wide_to_utf8(input_wide);
+    payload->request.output_path = wide_to_utf8(output_wide);
+    payload->request.options.include_il_comments =
         SendMessageW(g_il_comments, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    payload->output_path = output_wide;
 
-    set_status(L"Decompiling...");
-    UpdateWindow(g_status_edit);
+    set_ui_busy(true);
+    set_status(L"Decompiling... (this may take a while for large assemblies)");
 
-    try {
-        decompile_to_file(request);
-        const std::wstring message = L"Saved to:\n" + output_wide;
-        set_status(L"Done.");
-        MessageBoxW(g_window, message.c_str(), L"csdecomp", MB_ICONINFORMATION | MB_OK);
-    } catch (const std::exception& ex) {
-        const std::wstring message = utf8_to_wide(ex.what());
-        set_status(L"Error.");
-        MessageBoxW(g_window, message.c_str(), L"csdecomp", MB_ICONERROR | MB_OK);
+    g_worker_thread = CreateThread(nullptr, 0, decompile_worker_thread, payload, 0, nullptr);
+    if (g_worker_thread == nullptr) {
+        set_ui_busy(false);
+        delete payload;
+        MessageBoxW(g_window, L"Failed to start decompilation thread.", L"csdecomp", MB_ICONERROR | MB_OK);
     }
 }
 
@@ -287,7 +354,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                     break;
             }
             break;
+        case WM_DECOMPILE_DONE:
+            on_decompile_done(reinterpret_cast<std::wstring*>(lparam));
+            return 0;
+        case WM_DECOMPILE_ERROR:
+            on_decompile_error(reinterpret_cast<std::wstring*>(lparam));
+            return 0;
         case WM_DESTROY:
+            if (g_worker_thread != nullptr) {
+                WaitForSingleObject(g_worker_thread, INFINITE);
+                CloseHandle(g_worker_thread);
+                g_worker_thread = nullptr;
+            }
             if (g_ui_font != nullptr) {
                 DeleteObject(g_ui_font);
                 g_ui_font = nullptr;
