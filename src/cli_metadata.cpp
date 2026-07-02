@@ -129,9 +129,9 @@ void CliMetadata::parse_tables() {
     const auto blob_idx = blob_index_size_;
     const auto guid_idx = guid_index_size_;
 
-    const auto simple = [&](uint32_t rows) { return simple_index_size(rows); };
-    const auto coded = [&](uint32_t max_rows, uint32_t tag_bits) {
-        return coded_index_size(max_rows, tag_bits);
+    const auto simple = [&](uint32_t table) { return simple_index_size(row_counts_[table]); };
+    const auto coded = [&](std::initializer_list<int> tables, uint32_t tag_bits) {
+        return coded_index_size(max_row_count(tables), tag_bits);
     };
 
     table_row_sizes_.assign(64, 0);
@@ -141,27 +141,62 @@ void CliMetadata::parse_tables() {
 
     auto set_row_size = [&](int table, uint32_t size) { table_row_sizes_[table] = size; };
 
-    set_row_size(0, 2 + str_idx + guid_idx * 3);
-    set_row_size(1, coded(max_row_count({0, 26, 35, 1}), 2) + str_idx + str_idx);
-    set_row_size(2, 4 + str_idx + str_idx + coded(max_row_count({2, 1, 27}), 2) +
-                        simple(row_counts_[4]) + simple(row_counts_[6]));
-    set_row_size(4, 2 + str_idx + blob_idx);
-    set_row_size(6, 4 + 2 + 2 + str_idx + blob_idx + simple(row_counts_[8]));
-    set_row_size(8, 2 + 2 + str_idx);
-    set_row_size(9, simple(row_counts_[2]) + coded(max_row_count({2, 1, 27}), 2));
-    set_row_size(10, coded(max_row_count({2, 1, 26, 6, 27}), 3) + str_idx + blob_idx);
-    set_row_size(11, 2 + coded(max_row_count({4, 8, 23}), 2) + blob_idx);
-    set_row_size(12, coded(max_row_count({6, 4, 1, 2, 8, 9, 10, 0, 23, 20, 17, 26, 27, 32, 35, 38, 39, 40}),
-                            5) +
-                        coded(max_row_count({6, 10}), 1) + blob_idx);
-    set_row_size(17, blob_idx);
-    set_row_size(20, 2 + str_idx + coded(max_row_count({2, 1, 27}), 2));
-    set_row_size(23, 2 + str_idx + blob_idx);
-    set_row_size(26, str_idx);
-    set_row_size(27, blob_idx);
-    set_row_size(32, 4 + 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx);
-    set_row_size(35, 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx + blob_idx);
-    set_row_size(41, simple(row_counts_[2]) + simple(row_counts_[2]));
+    // ECMA-335 II.22 — row sizes for every table (missing entries caused offset drift).
+    set_row_size(0, 2 + str_idx + guid_idx * 3);  // Module
+    set_row_size(1, coded({0, 26, 35, 1}, 2) + str_idx + str_idx);  // TypeRef
+    set_row_size(2, 4 + str_idx + str_idx + coded({2, 1, 27}, 2) + simple(4) + simple(6));  // TypeDef
+    set_row_size(3, simple(4));  // FieldPtr
+    set_row_size(4, 2 + str_idx + blob_idx);  // Field
+    set_row_size(5, simple(6));  // MethodPtr
+    set_row_size(6, 4 + 2 + 2 + str_idx + blob_idx + simple(8));  // MethodDef
+    set_row_size(7, simple(8));  // ParamPtr
+    set_row_size(8, 2 + 2 + str_idx);  // Param
+    set_row_size(9, simple(2) + coded({2, 1, 27}, 2));  // InterfaceImpl
+    set_row_size(10, coded({2, 1, 26, 6, 27}, 3) + str_idx + blob_idx);  // MemberRef
+    set_row_size(11, 2 + coded({4, 8, 23}, 2) + blob_idx);  // Constant
+    set_row_size(12, coded({6, 4, 1, 2, 8, 9, 10, 0, 14, 23, 20, 17, 26, 27, 32, 35, 38, 39, 40}, 5) +
+                        coded({1, 2, 6, 10}, 2) + blob_idx);  // CustomAttribute
+    set_row_size(13, coded({4, 8}, 1) + blob_idx);  // FieldMarshal
+    set_row_size(14, 2 + coded({2, 6, 32}, 2) + blob_idx);  // DeclSecurity
+    set_row_size(15, 2 + 4 + simple(2));  // ClassLayout
+    set_row_size(16, 4 + simple(4));  // FieldLayout
+    set_row_size(17, blob_idx);  // StandAloneSig
+    set_row_size(18, simple(2) + simple(20));  // EventMap
+    set_row_size(19, simple(20));  // EventPtr
+    set_row_size(20, 2 + str_idx + coded({2, 1, 27}, 2));  // Event
+    set_row_size(21, simple(2) + simple(23));  // PropertyMap
+    set_row_size(22, simple(23));  // PropertyPtr
+    set_row_size(23, 2 + str_idx + blob_idx);  // Property
+    set_row_size(24, 2 + simple(6) + coded({20, 23}, 1));  // MethodSemantics
+    set_row_size(25, simple(2) + coded({6, 10}, 1) + coded({6, 10}, 1));  // MethodImpl
+    set_row_size(26, str_idx);  // ModuleRef
+    set_row_size(27, blob_idx);  // TypeSpec
+    set_row_size(28, 2 + coded({4, 6}, 1) + str_idx + simple(26));  // ImplMap
+    set_row_size(29, 4 + simple(4));  // FieldRva
+    set_row_size(30, 4 + 4);  // EncLog
+    set_row_size(31, 4);  // EncMap
+    set_row_size(32, 4 + 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx);  // Assembly
+    set_row_size(33, 4);  // AssemblyProcessor
+    set_row_size(34, 4 + 4 + 4);  // AssemblyOS
+    set_row_size(35, 2 + 2 + 2 + 2 + 4 + blob_idx + str_idx + str_idx + blob_idx);  // AssemblyRef
+    set_row_size(36, 4 + simple(35));  // AssemblyRefProcessor
+    set_row_size(37, 4 + 4 + 4 + simple(35));  // AssemblyRefOS
+    set_row_size(38, 4 + str_idx + blob_idx);  // File
+    set_row_size(39, 4 + 4 + str_idx + str_idx + coded({38, 35, 39}, 2));  // ExportedType
+    set_row_size(40, 4 + 4 + str_idx + coded({38, 35, 39}, 2));  // ManifestResource
+    set_row_size(41, simple(2) + simple(2));  // NestedClass
+    set_row_size(42, 2 + 2 + str_idx + coded({2, 6}, 1));  // GenericParam
+    set_row_size(43, coded({6, 10}, 1) + blob_idx);  // MethodSpec
+    set_row_size(44, simple(42) + coded({2, 1, 27}, 2));  // GenericParamConstraint
+    // Portable PDB debug tables (0x30–0x37)
+    set_row_size(48, guid_idx + str_idx + blob_idx);  // Document
+    set_row_size(49, simple(48) + blob_idx);  // MethodDebugInformation
+    set_row_size(50, simple(6) + simple(53) + simple(51) + simple(52) + 4 + 4);  // LocalScope
+    set_row_size(51, 2 + 2 + str_idx);  // LocalVariable
+    set_row_size(52, str_idx + blob_idx);  // LocalConstant
+    set_row_size(53, simple(53) + blob_idx);  // ImportScope
+    set_row_size(54, simple(6) + simple(49));  // StateMachineMethod
+    set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 2) + blob_idx);  // CustomDebugInformation
 
     size_t offset = 0;
     for (int i = 0; i < 64; ++i) {
@@ -308,7 +343,13 @@ std::string CliMetadata::get_string(uint32_t index) const {
         return {};
     }
     const char* start = reinterpret_cast<const char*>(strings_heap_.data() + index);
-    return std::string(start);
+    const char* heap_end = reinterpret_cast<const char*>(strings_heap_.data() + strings_heap_.size());
+    const size_t max_len = static_cast<size_t>(heap_end - start);
+    const void* null_ptr = std::memchr(start, '\0', max_len);
+    if (null_ptr == nullptr) {
+        return std::string(start, max_len);
+    }
+    return std::string(start, static_cast<const char*>(null_ptr) - start);
 }
 
 std::vector<uint8_t> CliMetadata::get_blob(uint32_t index) const {
@@ -503,7 +544,8 @@ MethodSignature CliMetadata::decode_method_signature(uint32_t blob_index) const 
         signature.default_calling_convention = (calling & 0x0F) == 0x00;
         signature.has_this = (calling & 0x20) != 0;
         signature.explicit_this = (calling & 0x40) != 0;
-        signature.param_count = read_compressed_uint(blob.data(), blob.size(), offset);
+        signature.param_count =
+            std::min(read_compressed_uint(blob.data(), blob.size(), offset), 512U);
         signature.return_type = decode_type_signature(blob.data(), blob.size(), offset);
         for (uint32_t i = 0; i < signature.param_count; ++i) {
             signature.param_types.push_back(decode_type_signature(blob.data(), blob.size(), offset));

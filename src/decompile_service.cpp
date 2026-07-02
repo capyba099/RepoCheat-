@@ -24,6 +24,7 @@ void decompile_loaded(const PeReader& pe, const CliMetadata& metadata, std::ostr
                       const DecompileOptions& options) {
     Decompiler decompiler(pe, metadata);
     decompiler.decompile_assembly(out, options);
+    out.flush();
 }
 
 }  // namespace
@@ -51,16 +52,28 @@ void decompile_to_file(const DecompileRequest& request) {
                                         ? request.input_path + ".decompiled.cs"
                                         : request.output_path;
 
-    const auto bytes = read_file_bytes(request.input_path);
-    PeReader pe(bytes);
-    CliMetadata metadata(pe);
-
     std::ofstream out(output_path, std::ios::binary);
     if (!out) {
         throw std::runtime_error("failed to open output file: " + output_path);
     }
 
-    decompile_loaded(pe, metadata, out, request.options);
+    out.flush();
+
+    try {
+        const auto bytes = read_file_bytes(request.input_path);
+        PeReader pe(bytes);
+        CliMetadata metadata(pe);
+        decompile_loaded(pe, metadata, out, request.options);
+        out.flush();
+    } catch (const std::exception& ex) {
+        out << "\n// csdecomp: failed: " << ex.what() << "\n";
+        out.flush();
+        throw;
+    } catch (...) {
+        out << "\n// csdecomp: failed with unknown error\n";
+        out.flush();
+        throw std::runtime_error("unknown decompilation error");
+    }
 }
 
 }  // namespace csdecomp

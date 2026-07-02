@@ -87,7 +87,10 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
                                 const DecompileOptions& options) const {
     const auto& type = metadata_.type_defs()[type_def_index];
     const std::string ns = metadata_.get_string(type.type_namespace_index);
-    const std::string name = metadata_.get_string(type.type_name_index);
+    std::string name = metadata_.get_string(type.type_name_index);
+    if (name.empty()) {
+        name = "Type_" + std::to_string(type_def_index + 1);
+    }
     const std::string base_type = metadata_.resolve_type_name(type.extends_index);
 
     if (!ns.empty()) {
