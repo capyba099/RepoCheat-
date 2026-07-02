@@ -29,11 +29,18 @@ cmake --build build --config Release
 
 ## Скачать готовый .exe (Windows)
 
-**Прямая ссылка на последнюю версию:**
+**Прямая ссылка (v0.1.15):**
 
-**[Скачать csdecomp.exe](https://github.com/capyba099/RepoCheat-/releases/latest/download/csdecomp.exe)**
+**[Скачать csdecomp.exe](https://github.com/capyba099/RepoCheat-/releases/download/v0.1.15/csdecomp.exe)**
 
-На странице [Releases](https://github.com/capyba099/RepoCheat-/releases) откройте последний релиз (например `v0.1.11`) и в блоке **Assets** выберите файл **`csdecomp.exe`**.
+Актуальная версия всегда здесь: [releases/latest/download/csdecomp.exe](https://github.com/capyba099/RepoCheat-/releases/latest/download/csdecomp.exe)
+
+### Как скачать со страницы Releases
+
+1. Откройте [Releases](https://github.com/capyba099/RepoCheat-/releases)
+2. Выберите последний релиз (сейчас **v0.1.15**)
+3. Прокрутите вниз до **Assets**
+4. Нажмите **`csdecomp.exe`** (~2.7 MB)
 
 | Что скачивать | Что это |
 |---------------|---------|
@@ -41,7 +48,9 @@ cmake --build build --config Release
 | `csdecomp-linux-x64` | Версия для Linux |
 | `Source code (zip)` | Только исходники — **без** `.exe` |
 
-Если в Assets пока только «Source code» — подождите ~1 минуту после публикации тега и обновите страницу (CI собирает `.exe`).
+**Важно:** `Source code (zip)` — это не программа. Нужен именно файл **`csdecomp.exe`** в Assets.
+
+После декомпиляции в начале `.cs` должна быть строка `// csdecomp: version=0.1.15` — так вы поймёте, что запущена новая версия.
 
 ## Использование
 
