@@ -3,6 +3,7 @@
 #include "csdecomp/pe_reader.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -153,8 +154,10 @@ private:
     void read_table_rows(TableId id, size_t row_count);
     void read_typedef_rows_standard(size_t row_count, uint32_t row_size, size_t base);
     void read_methoddef_rows_standard(size_t row_count, uint32_t row_size, size_t base);
-    void read_typedef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base);
-    void read_methoddef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base);
+    void read_typedef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
+    void read_methoddef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
+    [[nodiscard]] size_t find_table_skew(size_t base, size_t row_count, uint32_t row_size,
+                                         const std::function<int(const uint8_t*, uint32_t)>& score_row) const;
     [[nodiscard]] int score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] int score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] bool has_table(TableId id) const;

@@ -62,6 +62,13 @@ DecompileFileResult decompile_to_file(const DecompileRequest& request) {
     }
 
     try {
+        out << "// csdecomp: version=";
+#ifdef CSDECOMP_VERSION
+        out << CSDECOMP_VERSION;
+#else
+        out << "unknown";
+#endif
+        out << "\n";
         out << "// csdecomp: loading assembly\n";
         out.flush();
 

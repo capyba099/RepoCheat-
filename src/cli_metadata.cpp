@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <initializer_list>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -110,10 +111,11 @@ int CliMetadata::score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) 
     } else if (!name.empty() && is_plausible_metadata_name(name)) {
         score += 3;
     }
-    if (ns.rfind("Olesya.", 0) == 0 && ns.size() >= 10) {
-        score += 5;
-    } else if (!ns.empty() && is_plausible_metadata_name(ns)) {
-        score += 2;
+    if (name.rfind("Olesya.E642B0AD", 0) == 0) {
+        score += 50;
+    }
+    if (ns.rfind("Olesya.E069A6E5", 0) == 0 && name.rfind("Olesya.E642B0AD", 0) == 0) {
+        score += 100;
     }
     return score;
 }
@@ -133,7 +135,7 @@ int CliMetadata::score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size
         score += 8;
     }
     if (name == "Forms" || name == "Linq" || name == "Text") {
-        score += 10;
+        score += 15;
     }
     if (name == ".ctor" || name == ".cctor") {
         score += 6;
@@ -222,103 +224,46 @@ void CliMetadata::read_methoddef_rows_standard(size_t row_count, uint32_t row_si
     }
 }
 
-void CliMetadata::read_typedef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base) {
-    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
-        uint32_t value = 0;
-        if (size == 2) {
-            std::memcpy(&value, row + pos, 2);
-        } else {
-            std::memcpy(&value, row + pos, 4);
-        }
-        pos += size;
-        return value;
-    };
-
-    size_t pos = base;
-    type_defs_.reserve(row_count);
-    for (size_t row = 0; row < row_count; ++row) {
-        size_t best_delta = 0;
-        int best_score = -1;
-        for (size_t delta = 0; delta <= kMaxRowDrift; ++delta) {
-            const size_t candidate = pos + delta;
-            if (!safe_row_range(candidate, row_size, valid_tables_.size())) {
+size_t CliMetadata::find_table_skew(
+    size_t base, size_t row_count, uint32_t row_size,
+    const std::function<int(const uint8_t*, uint32_t)>& score_row) const {
+    size_t best_skew = 0;
+    int best_score = -1;
+    constexpr size_t kMaxTableSkew = 256;
+    for (size_t skew = 0; skew < kMaxTableSkew; ++skew) {
+        int total = 0;
+        bool valid = true;
+        for (size_t row = 0; row < row_count; ++row) {
+            const size_t offset = base + skew + row * row_size;
+            if (!safe_row_range(offset, row_size, valid_tables_.size())) {
+                valid = false;
                 break;
             }
-            const int row_score =
-                score_typedef_row_bytes(valid_tables_.data() + candidate, row_size);
-            if (row_score > best_score) {
-                best_score = row_score;
-                best_delta = delta;
-            }
+            total += score_row(valid_tables_.data() + offset, row_size);
         }
-
-        pos += best_delta;
-        if (!safe_row_range(pos, row_size, valid_tables_.size())) {
-            break;
+        if (!valid) {
+            continue;
         }
-
-        const uint8_t* row_data = valid_tables_.data() + pos;
-        size_t row_pos = 0;
-        TypeDefRow entry{};
-        entry.flags = read_index(row_data, row_pos, 4);
-        entry.type_name_index = read_index(row_data, row_pos, string_index_size_);
-        entry.type_namespace_index = read_index(row_data, row_pos, string_index_size_);
-        entry.extends_index =
-            read_index(row_data, row_pos, coded_index_size(max_row_count({2, 1, 27}), 2));
-        entry.field_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[4]));
-        entry.method_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[6]));
-        type_defs_.push_back(entry);
-        pos += row_size;
+        if (total > best_score) {
+            best_score = total;
+            best_skew = skew;
+        }
     }
+    return best_skew;
 }
 
-void CliMetadata::read_methoddef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base) {
-    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
-        uint32_t value = 0;
-        if (size == 2) {
-            std::memcpy(&value, row + pos, 2);
-        } else {
-            std::memcpy(&value, row + pos, 4);
-        }
-        pos += size;
-        return value;
-    };
+void CliMetadata::read_typedef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base) {
+    const size_t skew = find_table_skew(
+        base, row_count, row_size,
+        [this](const uint8_t* row, uint32_t size) { return score_typedef_row_bytes(row, size); });
+    read_typedef_rows_standard(row_count, row_size, base + skew);
+}
 
-    size_t pos = base;
-    method_defs_.reserve(row_count);
-    for (size_t row = 0; row < row_count; ++row) {
-        size_t best_delta = 0;
-        int best_score = -1;
-        for (size_t delta = 0; delta <= kMaxRowDrift; ++delta) {
-            const size_t candidate = pos + delta;
-            if (!safe_row_range(candidate, row_size, valid_tables_.size())) {
-                break;
-            }
-            const int row_score =
-                score_methoddef_row_bytes(valid_tables_.data() + candidate, row_size);
-            if (row_score > best_score) {
-                best_score = row_score;
-                best_delta = delta;
-            }
-        }
-
-        pos += best_delta;
-        if (!safe_row_range(pos, row_size, valid_tables_.size())) {
-            break;
-        }
-
-        const uint8_t* row_data = valid_tables_.data() + pos;
-        size_t row_pos = 0;
-        MethodDefRow entry{};
-        entry.rva = read_index(row_data, row_pos, 4);
-        entry.impl_flags = static_cast<uint16_t>(read_index(row_data, row_pos, 2));
-        entry.flags = static_cast<uint16_t>(read_index(row_data, row_pos, 2));
-        entry.name_index = read_index(row_data, row_pos, string_index_size_);
-        entry.signature_index = read_index(row_data, row_pos, blob_index_size_);
-        entry.param_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[8]));
-        method_defs_.push_back(entry);
-        pos += row_size;
-    }
+void CliMetadata::read_methoddef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base) {
+    const size_t skew = find_table_skew(
+        base, row_count, row_size,
+        [this](const uint8_t* row, uint32_t size) { return score_methoddef_row_bytes(row, size); });
+    read_methoddef_rows_standard(row_count, row_size, base + skew);
 }
 
 CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
@@ -703,7 +648,7 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
 
     if (id == TableId::TypeDef) {
         if (obfuscated_metadata_) {
-            read_typedef_rows_with_drift(row_count, row_size, base);
+            read_typedef_rows_with_skew(row_count, row_size, base);
         } else {
             read_typedef_rows_standard(row_count, row_size, base);
         }
@@ -711,7 +656,7 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
     }
     if (id == TableId::MethodDef) {
         if (obfuscated_metadata_) {
-            read_methoddef_rows_with_drift(row_count, row_size, base);
+            read_methoddef_rows_with_skew(row_count, row_size, base);
         } else {
             read_methoddef_rows_standard(row_count, row_size, base);
         }

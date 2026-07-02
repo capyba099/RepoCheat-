@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(csdecomp VERSION 0.1.14 LANGUAGES CXX)
+project(csdecomp VERSION 0.1.15 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +19,8 @@ add_executable(csdecomp
 )
 
 target_include_directories(csdecomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_compile_definitions(csdecomp PRIVATE CSDECOMP_VERSION="${PROJECT_VERSION}")
 
 if(MSVC)
     target_compile_options(csdecomp PRIVATE /W4 /permissive-)
