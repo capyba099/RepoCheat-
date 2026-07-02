@@ -1,5 +1,7 @@
 #include "csdecomp/il_reader.hpp"
 
+#include "csdecomp/method_body.hpp"
+
 #include <cstring>
 
 namespace csdecomp {
@@ -11,25 +13,11 @@ void IlReader::parse() {
         return;
     }
 
-    size_t offset = 0;
-    const uint8_t first = il_[0];
-    if ((first & 0x3) == 0x2) {
-        offset = 1;
-        max_stack_ = 8;
-    } else {
-        if (il_.size() < 12) {
-            throw std::runtime_error("invalid fat method header");
-        }
-        uint16_t flags{};
-        std::memcpy(&flags, il_.data(), 2);
-        const uint16_t header_size = static_cast<uint16_t>((flags >> 12) * 4);
-        max_stack_ = static_cast<uint32_t>(il_[2] | (il_[3] << 8));
-        init_locals_ = (flags & 0x0400) != 0;
-        uint32_t local_sig{};
-        std::memcpy(&local_sig, il_.data() + 8, 4);
-        local_var_sig_token_ = local_sig;
-        offset = header_size;
-    }
+    const MethodHeader header = parse_method_header(il_, il_.size());
+    max_stack_ = header.max_stack;
+    init_locals_ = header.init_locals;
+    local_var_sig_token_ = header.local_var_sig_token;
+    size_t offset = header.header_size;
 
     while (offset < il_.size()) {
         IlInstruction insn{};

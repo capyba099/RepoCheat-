@@ -160,7 +160,15 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
                                               const std::vector<std::string>& param_names) const {
     const auto& method = metadata_.method_defs()[method_def_index];
     const bool is_static = (method.flags & 0x0010) != 0;
-    const auto il_bytes = metadata_.get_method_il(method.rva);
+
+    std::vector<uint8_t> il_bytes;
+    try {
+        il_bytes = metadata_.get_method_il(method.rva);
+    } catch (const std::exception& ex) {
+        return indent(2) + "// Failed to read method body at RVA 0x" +
+               std::to_string(method.rva) + ": " + ex.what() + "\n";
+    }
+
     if (il_bytes.empty()) {
         return indent(2) + "// No IL body (abstract/extern/pinvoke)\n";
     }

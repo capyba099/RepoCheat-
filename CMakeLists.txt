@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(csdecomp VERSION 0.1.1 LANGUAGES CXX)
+project(csdecomp VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,7 @@ add_executable(csdecomp
     src/main.cpp
     src/decompile_service.cpp
     src/gui_win32.cpp
+    src/method_body.cpp
     src/binary_reader.cpp
     src/pe_reader.cpp
     src/cli_metadata.cpp

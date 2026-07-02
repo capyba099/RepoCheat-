@@ -32,6 +32,7 @@ public:
     [[nodiscard]] const std::vector<SectionHeader>& sections() const { return sections_; }
 
     [[nodiscard]] uint32_t rva_to_offset(uint32_t rva) const;
+    [[nodiscard]] size_t max_read_size_at_rva(uint32_t rva) const;
     [[nodiscard]] std::vector<uint8_t> read_at_rva(uint32_t rva, size_t size) const;
     [[nodiscard]] BinaryReader reader_at_rva(uint32_t rva) const;
 

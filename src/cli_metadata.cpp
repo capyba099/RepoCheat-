@@ -1,5 +1,7 @@
 #include "csdecomp/cli_metadata.hpp"
 
+#include "csdecomp/method_body.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <initializer_list>
@@ -601,24 +603,19 @@ std::string CliMetadata::resolve_member_ref(uint32_t index) const {
     return declaring.empty() ? name : declaring + "." + name;
 }
 
+#include "csdecomp/method_body.hpp"
+
 std::vector<uint8_t> CliMetadata::get_method_il(uint32_t method_rva) const {
     if (method_rva == 0) {
         return {};
     }
-    auto first_byte = pe_.read_at_rva(method_rva, 1);
-    const uint8_t header = first_byte[0];
-    if ((header & 0x3) == 0x2) {
-        const uint32_t total_size = 1 + (header >> 2);
-        return pe_.read_at_rva(method_rva, total_size);
-    }
 
-    auto header_bytes = pe_.read_at_rva(method_rva, 12);
-    uint16_t flags{};
-    std::memcpy(&flags, header_bytes.data(), 2);
-    const uint16_t header_size = static_cast<uint16_t>((flags >> 12) * 4);
-    uint32_t code_size{};
-    std::memcpy(&code_size, header_bytes.data() + 4, 4);
-    return pe_.read_at_rva(method_rva, header_size + code_size);
+    const size_t max_size = pe_.max_read_size_at_rva(method_rva);
+    const size_t peek_size = std::min(max_size, static_cast<size_t>(12));
+    const auto header_bytes = pe_.read_at_rva(method_rva, peek_size);
+    const MethodHeader header =
+        parse_method_header(header_bytes, max_size);
+    return pe_.read_at_rva(method_rva, method_body_total_size(header));
 }
 
 std::vector<size_t> CliMetadata::fields_for_type(size_t type_def_index) const {
