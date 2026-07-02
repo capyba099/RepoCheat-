@@ -1,95 +1,85 @@
-#include "csdecomp/cli_metadata.hpp"
-#include "csdecomp/decompiler.hpp"
-#include "csdecomp/pe_reader.hpp"
+#include "csdecomp/decompile_service.hpp"
+#include "csdecomp/gui_win32.hpp"
 
-#include <fstream>
 #include <iostream>
-#include <sstream>
-#include <vector>
+#include <string>
 
 namespace {
 
 void print_usage(const char* program) {
     std::cerr << "csdecomp - C# assembly decompiler (C++)\n\n"
               << "Usage:\n"
-              << "  " << program << " <assembly.dll|exe> [options]\n\n"
+              << "  " << program << " [assembly.dll|exe] [options]\n\n"
               << "Options:\n"
               << "  -o, --output <file>   Write decompiled C# to file (default: stdout)\n"
               << "  --il-comments         Include IL offset comments in method bodies\n"
-              << "  -h, --help            Show this help message\n";
+              << "  -h, --help            Show this help message\n"
+#ifdef _WIN32
+              << "\nRun without arguments to open the graphical interface.\n"
+#endif
+        ;
 }
 
-std::vector<uint8_t> read_file(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("failed to open file: " + path);
+int run_cli(int argc, char** argv) {
+    std::string input_path;
+    std::string output_path;
+    csdecomp::DecompileOptions options;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return 0;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            output_path = argv[++i];
+            continue;
+        }
+        if (arg == "--il-comments") {
+            options.include_il_comments = true;
+            continue;
+        }
+        if (arg.rfind('-', 0) == 0) {
+            std::cerr << "Unknown option: " << arg << "\n";
+            return 1;
+        }
+        if (input_path.empty()) {
+            input_path = arg;
+        } else {
+            std::cerr << "Unexpected argument: " << arg << "\n";
+            return 1;
+        }
     }
-    return std::vector<uint8_t>((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+
+    if (input_path.empty()) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    csdecomp::DecompileRequest request;
+    request.input_path = std::move(input_path);
+    request.output_path = std::move(output_path);
+    request.options = options;
+
+    if (request.output_path.empty()) {
+        std::cout << csdecomp::decompile_to_string(request);
+    } else {
+        csdecomp::decompile_to_file(request);
+        std::cerr << "Decompiled C# written to " << request.output_path << "\n";
+    }
+    return 0;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
-        if (argc < 2) {
-            print_usage(argv[0]);
-            return 1;
+#ifdef _WIN32
+        if (argc <= 1) {
+            return csdecomp::run_win32_gui();
         }
-
-        std::string input_path;
-        std::string output_path;
-        csdecomp::DecompileOptions options;
-
-        for (int i = 1; i < argc; ++i) {
-            const std::string arg = argv[i];
-            if (arg == "-h" || arg == "--help") {
-                print_usage(argv[0]);
-                return 0;
-            }
-            if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
-                output_path = argv[++i];
-                continue;
-            }
-            if (arg == "--il-comments") {
-                options.include_il_comments = true;
-                continue;
-            }
-            if (arg.rfind('-', 0) == 0) {
-                std::cerr << "Unknown option: " << arg << "\n";
-                return 1;
-            }
-            if (input_path.empty()) {
-                input_path = arg;
-            } else {
-                std::cerr << "Unexpected argument: " << arg << "\n";
-                return 1;
-            }
-        }
-
-        if (input_path.empty()) {
-            print_usage(argv[0]);
-            return 1;
-        }
-
-        const auto bytes = read_file(input_path);
-        csdecomp::PeReader pe(bytes);
-        csdecomp::CliMetadata metadata(pe);
-        csdecomp::Decompiler decompiler(pe, metadata);
-
-        std::ostringstream buffer;
-        decompiler.decompile_assembly(buffer, options);
-
-        if (output_path.empty()) {
-            std::cout << buffer.str();
-        } else {
-            std::ofstream out(output_path);
-            if (!out) {
-                throw std::runtime_error("failed to open output file: " + output_path);
-            }
-            out << buffer.str();
-            std::cerr << "Decompiled C# written to " << output_path << "\n";
-        }
-        return 0;
+#endif
+        return run_cli(argc, argv);
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << "\n";
         return 2;

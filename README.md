@@ -31,6 +31,12 @@ cmake --build build --config Release
 
 ## Использование
 
+### Графический интерфейс (Windows)
+
+Запустите `csdecomp.exe` без аргументов — откроется окно с выбором `.dll`/`.exe` и пути для сохранения `.cs`.
+
+### Командная строка
+
 ```bash
 # Linux
 ./build/csdecomp path/to/assembly.dll
