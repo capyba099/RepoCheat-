@@ -68,7 +68,7 @@ void decompile_to_file(const DecompileRequest& request) {
     } catch (const std::exception& ex) {
         out << "\n// csdecomp: failed: " << ex.what() << "\n";
         out.flush();
-        throw;
+        throw std::runtime_error(ex.what());
     } catch (...) {
         out << "\n// csdecomp: failed with unknown error\n";
         out.flush();

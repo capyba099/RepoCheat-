@@ -65,13 +65,25 @@ void post_decompile_error(const std::wstring& text);
 LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info);
 PVOID g_vectored_handler = nullptr;
 
+constexpr DWORD kGccCppException = 0x20474343;   // MinGW/GCC C++ exception (" GCC")
+constexpr DWORD kMsvcCppException = 0xE06D7363;  // MSVC C++ exception
+
+bool is_cpp_exception_code(DWORD code) {
+    return code == kGccCppException || code == kMsvcCppException;
+}
+
+bool is_debug_exception_code(DWORD code) {
+    return code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP;
+}
+
 LONG CALLBACK gui_vectored_exception_handler(EXCEPTION_POINTERS* info) {
     if (!g_decompile_worker_active || info == nullptr || info->ExceptionRecord == nullptr) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
     const DWORD code = info->ExceptionRecord->ExceptionCode;
-    if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+    // Let C++ try/catch handle thrown exceptions (MinGW uses SEH under the hood).
+    if (is_cpp_exception_code(code) || is_debug_exception_code(code)) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -84,6 +96,7 @@ LONG CALLBACK gui_vectored_exception_handler(EXCEPTION_POINTERS* info) {
     post_decompile_error(buffer);
     g_decompile_worker_active = false;
     ExitThread(1);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void post_decompile_error(const std::wstring& text) {
@@ -97,11 +110,15 @@ void post_decompile_error(const std::wstring& text) {
 }
 
 LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
-    wchar_t buffer[512]{};
     const unsigned long code =
         info != nullptr && info->ExceptionRecord != nullptr
             ? static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode)
             : 0UL;
+    if (is_cpp_exception_code(static_cast<DWORD>(code))) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    wchar_t buffer[512]{};
     std::swprintf(buffer, 512,
                   L"csdecomp crashed.\n\nException code: 0x%08lX\n\n"
                   L"The assembly may be corrupted, obfuscated, or too large.",
