@@ -280,10 +280,12 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
 
     std::vector<uint8_t> il_bytes;
     try {
-        il_bytes = metadata_.get_method_il(method.rva);
+        il_bytes = metadata_.get_method_il(method.rva, method_def_index);
     } catch (const std::exception& ex) {
-        return indent(2) + "// Failed to read method body at RVA 0x" +
-               std::to_string(method.rva) + ": " + ex.what() + "\n";
+        std::ostringstream rva_stream;
+        rva_stream << std::hex << method.rva;
+        return indent(2) + "// Failed to read method body at RVA 0x" + rva_stream.str() + ": " +
+               ex.what() + "\n";
     }
 
     if (il_bytes.empty()) {

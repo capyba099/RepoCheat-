@@ -56,7 +56,7 @@ cmake --build build --config Release
 
 ### Графический интерфейс (Windows)
 
-Запустите `csdecomp.exe` без аргументов — откроется окно с выбором `.dll`/`.exe` и пути для сохранения `.cs`.
+Запустите `csdecomp.exe` без аргументов — откроется окно с выбором `.dll`/`.exe` и пути сохранения. Включите **Create Visual Studio project (.sln + .csproj)** для генерации полноценного проекта с папками и solution-файлом.
 
 ### Командная строка
 
@@ -68,6 +68,24 @@ cmake --build build --config Release
 csdecomp.exe path\to\assembly.dll
 csdecomp.exe path\to\assembly.dll -o output.cs
 csdecomp.exe path\to\assembly.dll --il-comments
+
+# Создать полноценный Visual Studio проект (.sln + .csproj + .cs файлы по папкам)
+csdecomp.exe path\to\assembly.dll --project C:\output\injector_decompiled
+csdecomp.exe path\to\assembly.dll --project C:\output --project-name Injector --target-framework net48
+```
+
+Структура при `--project`:
+
+```
+output/
+  Injector.sln
+  Injector/
+    Injector.csproj
+    SharpMonoInjector/
+      Gui/
+        MainWindowViewModel.cs
+    Olesya/
+      ...
 ```
 
 ## Тестовый пример

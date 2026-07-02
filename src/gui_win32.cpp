@@ -9,8 +9,10 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shlobj.h>
 
 #include "csdecomp/decompile_service.hpp"
+#include "csdecomp/project_emitter.hpp"
 
 #include <cstdio>
 #include <exception>
@@ -30,6 +32,7 @@ constexpr int kInputBrowseId = 1002;
 constexpr int kOutputEditId = 1003;
 constexpr int kOutputBrowseId = 1004;
 constexpr int kIlCommentsId = 1005;
+constexpr int kProjectModeId = 1008;
 constexpr int kDecompileId = 1006;
 constexpr int kStatusEditId = 1007;
 
@@ -45,6 +48,7 @@ HWND g_window = nullptr;
 HWND g_input_edit = nullptr;
 HWND g_output_edit = nullptr;
 HWND g_il_comments = nullptr;
+HWND g_project_mode = nullptr;
 HWND g_status_edit = nullptr;
 HFONT g_ui_font = nullptr;
 HANDLE g_worker_thread = nullptr;
@@ -53,6 +57,7 @@ volatile bool g_decompile_worker_active = false;
 
 struct DecompileWorkerPayload {
     DecompileRequest request;
+    bool project_mode{false};
     std::wstring output_path;
 };
 
@@ -147,10 +152,18 @@ LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
 void run_decompile_job(DecompileWorkerPayload* payload) {
     g_decompile_worker_active = true;
 
-    const DecompileFileResult result = decompile_to_file(payload->request);
+    const DecompileFileResult result =
+        payload->project_mode ? decompile_to_project(payload->request) : decompile_to_file(payload->request);
     if (result.ok) {
-        auto* message = new std::wstring(L"Saved to:\n" + payload->output_path);
-        PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(message));
+        std::wstring message;
+        if (payload->project_mode) {
+            message = L"Visual Studio project created:\n" + utf8_to_wide(result.solution_path) +
+                      L"\n\nSource files: " + std::to_wstring(result.source_files.size());
+        } else {
+            message = L"Saved to:\n" + payload->output_path;
+        }
+        auto* heap_message = new std::wstring(std::move(message));
+        PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(heap_message));
     } else {
         post_decompile_error(utf8_to_wide(result.error_message));
     }
@@ -255,6 +268,19 @@ std::wstring suggested_output_path(const std::wstring& input_path) {
     return input_path + L".decompiled.cs";
 }
 
+std::wstring suggested_project_path(const std::wstring& input_path) {
+    if (input_path.empty()) {
+        return L"decompiled_project";
+    }
+    const size_t slash = input_path.find_last_of(L"\\/");
+    const size_t dot = input_path.find_last_of(L'.');
+    const std::wstring stem =
+        (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash))
+            ? input_path.substr(slash == std::wstring::npos ? 0 : slash + 1, dot - (slash == std::wstring::npos ? 0 : slash + 1))
+            : input_path.substr(slash == std::wstring::npos ? 0 : slash + 1);
+    return stem + L"_decompiled";
+}
+
 void apply_font(HWND control) {
     if (g_ui_font != nullptr) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_ui_font), TRUE);
@@ -311,6 +337,27 @@ bool browse_for_assembly(HWND owner, std::wstring& selected) {
 }
 
 bool browse_for_output(HWND owner, std::wstring& selected) {
+    const bool project_mode =
+        g_project_mode != nullptr && SendMessageW(g_project_mode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (project_mode) {
+        BROWSEINFOW browse{};
+        browse.hwndOwner = owner;
+        browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        browse.lpszTitle = L"Select folder for Visual Studio project";
+        PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&browse);
+        if (pidl == nullptr) {
+            return false;
+        }
+        wchar_t buffer[MAX_PATH]{};
+        const BOOL ok = SHGetPathFromIDListW(pidl, buffer);
+        CoTaskMemFree(pidl);
+        if (!ok) {
+            return false;
+        }
+        selected = buffer;
+        return true;
+    }
+
     wchar_t buffer[MAX_PATH]{};
     if (!selected.empty() && selected.size() < MAX_PATH) {
         wcscpy_s(buffer, selected.c_str());
@@ -376,9 +423,16 @@ void on_decompile() {
 
     auto* payload = new DecompileWorkerPayload{};
     payload->request.input_path = wide_to_utf8(input_wide);
-    payload->request.output_path = wide_to_utf8(output_wide);
     payload->request.options.include_il_comments =
         SendMessageW(g_il_comments, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    payload->project_mode =
+        g_project_mode != nullptr && SendMessageW(g_project_mode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (payload->project_mode) {
+        payload->request.project_output_dir = wide_to_utf8(output_wide);
+        payload->request.project_name = derive_project_name(payload->request.input_path);
+    } else {
+        payload->request.output_path = wide_to_utf8(output_wide);
+    }
     payload->output_path = output_wide;
 
     set_ui_busy(true);
@@ -411,19 +465,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                           kInputBrowseId);
 
             y += kRowHeight + 18;
-            create_label(hwnd, L"Output .cs file:", kMargin, y, edit_width);
+            create_label(hwnd, L"Output path:", kMargin, y, edit_width);
             y += 22;
             g_output_edit =
                 create_edit(hwnd, kMargin, y, edit_width, kRowHeight, kOutputEditId, false);
             create_button(hwnd, L"Browse...", kMargin + edit_width + 8, y - 2, kButtonWidth, 28,
                           kOutputBrowseId);
 
-            y += kRowHeight + 18;
+            y += kRowHeight + 12;
             g_il_comments = CreateWindowExW(
                 0, L"BUTTON", L"Include IL comments", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                 kMargin, y, 260, 24, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIlCommentsId)),
                 GetModuleHandleW(nullptr), nullptr);
             apply_font(g_il_comments);
+
+            y += 28;
+            g_project_mode = CreateWindowExW(
+                0, L"BUTTON", L"Create Visual Studio project (.sln + .csproj)",
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, kMargin, y, 420, 24, hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kProjectModeId)), GetModuleHandleW(nullptr),
+                nullptr);
+            apply_font(g_project_mode);
 
             y += 34;
             create_button(hwnd, L"Decompile", kMargin, y, 160, 34, kDecompileId);

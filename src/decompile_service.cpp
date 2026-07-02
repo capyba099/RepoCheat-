@@ -3,6 +3,7 @@
 #include "csdecomp/cli_metadata.hpp"
 #include "csdecomp/decompiler.hpp"
 #include "csdecomp/pe_reader.hpp"
+#include "csdecomp/project_emitter.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -102,6 +103,52 @@ DecompileFileResult decompile_to_file(const DecompileRequest& request) {
 
     out << "\n// csdecomp: failed: " << result.error_message << "\n";
     out.flush();
+    return result;
+}
+
+DecompileFileResult decompile_to_project(const DecompileRequest& request) {
+    DecompileFileResult result;
+
+    if (request.input_path.empty()) {
+        result.error_message = "input file is not selected";
+        return result;
+    }
+    if (request.project_output_dir.empty()) {
+        result.error_message = "project output directory is not selected";
+        return result;
+    }
+
+    try {
+        const auto bytes = read_file_bytes(request.input_path);
+        PeReader pe(bytes);
+        CliMetadata metadata(pe);
+        Decompiler decompiler(pe, metadata);
+
+        ProjectEmitOptions project_options;
+        project_options.output_dir = request.project_output_dir;
+        project_options.project_name = request.project_name.empty() ? derive_project_name(request.input_path)
+                                                                    : request.project_name;
+        project_options.target_framework = request.target_framework;
+
+        const ProjectEmitResult emitted =
+            emit_visual_studio_project(pe, metadata, decompiler, project_options, request.options);
+        if (!emitted.ok) {
+            result.error_message = emitted.error_message;
+            return result;
+        }
+
+        result.ok = true;
+        result.solution_path = emitted.solution_path;
+        result.project_path = emitted.project_path;
+        result.source_files = emitted.source_files;
+        return result;
+    } catch (const std::bad_alloc&) {
+        result.error_message = "out of memory while decompiling";
+    } catch (const std::exception& ex) {
+        result.error_message = ex.what();
+    } catch (...) {
+        result.error_message = "unknown decompilation error";
+    }
     return result;
 }
 

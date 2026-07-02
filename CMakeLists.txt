@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(csdecomp VERSION 0.1.18 LANGUAGES CXX)
+project(csdecomp VERSION 0.1.20 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +10,7 @@ add_executable(csdecomp
     src/decompile_service.cpp
     src/gui_win32.cpp
     src/method_body.cpp
+    src/method_il_repair.cpp
     src/binary_reader.cpp
     src/pe_reader.cpp
     src/cli_metadata.cpp
@@ -17,6 +18,7 @@ add_executable(csdecomp
     src/il_reader.cpp
     src/decompiler.cpp
     src/metadata_names.cpp
+    src/project_emitter.cpp
 )
 
 target_include_directories(csdecomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -35,7 +37,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(csdecomp PRIVATE comctl32 comdlg32)
+    target_link_libraries(csdecomp PRIVATE comctl32 comdlg32 shell32)
 endif()
 
 install(TARGETS csdecomp RUNTIME DESTINATION bin)

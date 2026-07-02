@@ -2,6 +2,7 @@
 
 #include "csdecomp/metadata_names.hpp"
 #include "csdecomp/method_body.hpp"
+#include "csdecomp/method_il_repair.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -462,7 +463,13 @@ CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
     if (!parse_tables_with_heap_sizes(best_heap)) {
         throw std::runtime_error("failed to parse metadata tables");
     }
+
+    if (obfuscated_metadata_) {
+        il_repair_ = std::make_unique<MethodIlRepair>(pe_, method_defs_);
+    }
 }
+
+CliMetadata::~CliMetadata() = default;
 
 void CliMetadata::read_tables_header() {
     BinaryReader reader(tables_data_);
@@ -1345,7 +1352,11 @@ std::string CliMetadata::resolve_member_ref(uint32_t index) const {
     return declaring.empty() ? name : declaring + "." + name;
 }
 
-std::vector<uint8_t> CliMetadata::get_method_il(uint32_t method_rva) const {
+std::vector<uint8_t> CliMetadata::get_method_il(uint32_t method_rva, size_t method_index) const {
+    if (il_repair_) {
+        return il_repair_->read_method_il(method_rva, method_index);
+    }
+
     if (method_rva == 0) {
         return {};
     }
@@ -1353,8 +1364,7 @@ std::vector<uint8_t> CliMetadata::get_method_il(uint32_t method_rva) const {
     const size_t max_size = pe_.max_read_size_at_rva(method_rva);
     const size_t peek_size = std::min(max_size, static_cast<size_t>(12));
     const auto header_bytes = pe_.read_at_rva(method_rva, peek_size);
-    const MethodHeader header =
-        parse_method_header(header_bytes, max_size);
+    const MethodHeader header = parse_method_header(header_bytes, max_size);
     return pe_.read_at_rva(method_rva, method_body_total_size(header));
 }
 

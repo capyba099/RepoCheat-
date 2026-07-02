@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -100,6 +101,8 @@ struct PropertyMapRow {
     uint32_t property_list_index{0};
 };
 
+class MethodIlRepair;
+
 struct MethodSignature {
     bool has_this{false};
     bool explicit_this{false};
@@ -116,6 +119,7 @@ struct FieldSignature {
 class CliMetadata {
 public:
     explicit CliMetadata(const PeReader& pe);
+    ~CliMetadata();
 
     [[nodiscard]] std::string get_string(uint32_t index) const;
     [[nodiscard]] std::vector<uint8_t> get_blob(uint32_t index) const;
@@ -137,7 +141,7 @@ public:
     [[nodiscard]] std::string resolve_type_token(uint32_t token) const;
     [[nodiscard]] MethodSignature decode_method_signature(uint32_t blob_index) const;
     [[nodiscard]] FieldSignature decode_field_signature(uint32_t blob_index) const;
-    [[nodiscard]] std::vector<uint8_t> get_method_il(uint32_t method_rva) const;
+    [[nodiscard]] std::vector<uint8_t> get_method_il(uint32_t method_rva, size_t method_index) const;
 
     [[nodiscard]] std::vector<size_t> fields_for_type(size_t type_def_index) const;
     [[nodiscard]] std::vector<size_t> methods_for_type(size_t type_def_index) const;
@@ -220,6 +224,7 @@ private:
     std::vector<uint32_t> param_ptrs_;
     std::vector<PropertyRow> properties_;
     std::vector<PropertyMapRow> property_maps_;
+    std::unique_ptr<MethodIlRepair> il_repair_;
 };
 
 }  // namespace csdecomp
