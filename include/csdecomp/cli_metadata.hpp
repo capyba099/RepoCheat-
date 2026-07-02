@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csdecomp/pe_reader.hpp"
+#include "csdecomp/metadata_names.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -144,6 +145,11 @@ public:
     [[nodiscard]] std::vector<size_t> nested_types_for_type(size_t type_def_index) const;
     [[nodiscard]] std::vector<size_t> properties_for_type(size_t type_def_index) const;
 
+    [[nodiscard]] TypeDisplayName get_type_display_name(size_t type_def_index) const;
+    [[nodiscard]] std::string get_method_display_name(uint32_t name_index, size_t method_index) const;
+    [[nodiscard]] bool should_emit_method(size_t method_def_index) const;
+    [[nodiscard]] bool obfuscated_metadata() const { return obfuscated_metadata_; }
+
 private:
     void parse_metadata_root();
     void read_tables_header();
@@ -156,10 +162,13 @@ private:
     void read_methoddef_rows_standard(size_t row_count, uint32_t row_size, size_t base);
     void read_typedef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
     void read_methoddef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
+    void read_memberref_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
+    void read_memberref_rows_standard(size_t row_count, uint32_t row_size, size_t base);
     [[nodiscard]] size_t find_table_skew(size_t base, size_t row_count, uint32_t row_size,
                                          const std::function<int(const uint8_t*, uint32_t)>& score_row) const;
     [[nodiscard]] int score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] int score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size) const;
+    [[nodiscard]] int score_memberref_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] bool has_table(TableId id) const;
     [[nodiscard]] uint32_t resolve_field_rid(uint32_t list_index) const;
     [[nodiscard]] uint32_t resolve_method_rid(uint32_t list_index) const;

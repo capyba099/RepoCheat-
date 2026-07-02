@@ -1,5 +1,6 @@
 #include "csdecomp/cli_metadata.hpp"
 
+#include "csdecomp/metadata_names.hpp"
 #include "csdecomp/method_body.hpp"
 
 #include <algorithm>
@@ -264,6 +265,109 @@ void CliMetadata::read_methoddef_rows_with_skew(size_t row_count, uint32_t row_s
         base, row_count, row_size,
         [this](const uint8_t* row, uint32_t size) { return score_methoddef_row_bytes(row, size); });
     read_methoddef_rows_standard(row_count, row_size, base + skew);
+}
+
+int CliMetadata::score_memberref_row_bytes(const uint8_t* row, uint32_t row_size) const {
+    if (row == nullptr || row_size < 6) {
+        return -1;
+    }
+
+    const uint32_t class_coded_size =
+        coded_index_size(max_row_count({2, 1, 26, 6, 27}), 3);
+    if (row_size < class_coded_size + string_index_size_) {
+        return -1;
+    }
+
+    const uint32_t class_index = read_row_index(row, 0, class_coded_size);
+    const uint32_t name_index = read_row_index(row, class_coded_size, string_index_size_);
+    const std::string name = get_string(name_index);
+    const uint32_t tag = class_index & 0x7U;
+    const uint32_t parent = class_index >> 3;
+
+    bool parent_ok = false;
+    switch (tag) {
+        case 0:
+            parent_ok = parent > 0 && parent <= row_counts_[2];
+            break;
+        case 1:
+            parent_ok = parent > 0 && parent <= row_counts_[1];
+            break;
+        case 2:
+            parent_ok = parent > 0 && parent <= row_counts_[26];
+            break;
+        case 3:
+            parent_ok = parent > 0 && parent <= row_counts_[6];
+            break;
+        case 4:
+            parent_ok = parent > 0 && parent <= row_counts_[27];
+            break;
+        default:
+            break;
+    }
+    if (!parent_ok) {
+        return -1;
+    }
+
+    int score = 0;
+    if (name.empty()) {
+        return score;
+    }
+    if (name[0] == '.') {
+        return -1;
+    }
+    if (name.rfind("get_", 0) == 0 || name.rfind("set_", 0) == 0) {
+        score += 15;
+    }
+    if (name.rfind("add_", 0) == 0 || name.rfind("remove_", 0) == 0) {
+        score += 12;
+    }
+    if (name == ".ctor" || name == "Invoke" || name == "ToString" || name == "Convert" ||
+        name == "ConvertBack") {
+        score += 10;
+    }
+    if (name.rfind("Olesya.", 0) == 0) {
+        score += 1;
+    } else if (is_plausible_metadata_name(name)) {
+        score += 4;
+    }
+    return score;
+}
+
+void CliMetadata::read_memberref_rows_standard(size_t row_count, uint32_t row_size, size_t base) {
+    const uint32_t class_coded_size =
+        coded_index_size(max_row_count({2, 1, 26, 6, 27}), 3);
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    member_refs_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        const size_t row_offset = base + row * row_size;
+        if (!safe_row_range(row_offset, row_size, valid_tables_.size())) {
+            throw std::runtime_error("metadata row read out of bounds in MemberRef table");
+        }
+        const uint8_t* row_data = valid_tables_.data() + row_offset;
+        size_t pos = 0;
+        MemberRefRow entry{};
+        entry.class_index = read_index(row_data, pos, class_coded_size);
+        entry.name_index = read_index(row_data, pos, string_index_size_);
+        entry.signature_index = read_index(row_data, pos, blob_index_size_);
+        member_refs_.push_back(entry);
+    }
+}
+
+void CliMetadata::read_memberref_rows_with_skew(size_t row_count, uint32_t row_size, size_t base) {
+    const size_t skew = find_table_skew(
+        base, row_count, row_size,
+        [this](const uint8_t* row, uint32_t size) { return score_memberref_row_bytes(row, size); });
+    read_memberref_rows_standard(row_count, row_size, base + skew);
 }
 
 CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
@@ -662,6 +766,14 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
         }
         return;
     }
+    if (id == TableId::MemberRef) {
+        if (obfuscated_metadata_) {
+            read_memberref_rows_with_skew(row_count, row_size, base);
+        } else {
+            read_memberref_rows_standard(row_count, row_size, base);
+        }
+        return;
+    }
 
     const auto str_idx = string_index_size_;
     const auto blob_idx = blob_index_size_;
@@ -725,15 +837,8 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
                 params_.push_back(entry);
                 break;
             }
-            case TableId::MemberRef: {
-                MemberRefRow entry{};
-                entry.class_index = read_index(
-                    row_data, pos, coded_index_size(max_row_count({2, 1, 26, 6, 27}), 3));
-                entry.name_index = read_index(row_data, pos, str_idx);
-                entry.signature_index = read_index(row_data, pos, blob_idx);
-                member_refs_.push_back(entry);
+            case TableId::MemberRef:
                 break;
-            }
             case TableId::TypeRef: {
                 TypeRefRow entry{};
                 entry.resolution_scope_index = read_index(
@@ -1012,6 +1117,40 @@ FieldSignature CliMetadata::decode_field_signature(uint32_t blob_index) const {
     return signature;
 }
 
+TypeDisplayName CliMetadata::get_type_display_name(size_t type_def_index) const {
+    if (type_def_index >= type_defs_.size()) {
+        return TypeDisplayName{"", "Type_" + std::to_string(type_def_index + 1)};
+    }
+    const auto& type = type_defs_[type_def_index];
+    return split_type_display_name(get_string(type.type_namespace_index),
+                                   get_string(type.type_name_index));
+}
+
+std::string CliMetadata::get_method_display_name(uint32_t name_index, size_t method_index) const {
+    return format_method_display_name(get_string(name_index), method_index);
+}
+
+bool CliMetadata::should_emit_method(size_t method_def_index) const {
+    if (method_def_index >= method_defs_.size()) {
+        return false;
+    }
+    if (!obfuscated_metadata_) {
+        return true;
+    }
+    return should_emit_obfuscated_method(get_string(method_defs_[method_def_index].name_index));
+}
+
+namespace {
+
+std::string join_qualified_name(const TypeDisplayName& parts) {
+    if (parts.namespace_name.empty()) {
+        return parts.name;
+    }
+    return parts.namespace_name + "." + parts.name;
+}
+
+}  // namespace
+
 std::string CliMetadata::resolve_type_encoded(uint32_t encoded) const {
     std::unordered_set<uint32_t> typespec_visit;
     return resolve_type_encoded(encoded, 0, typespec_visit);
@@ -1032,19 +1171,16 @@ std::string CliMetadata::resolve_type_encoded(uint32_t encoded, int depth,
         if (index > type_defs_.size()) {
             return "TypeDef?" + std::to_string(index);
         }
-        const auto& type = type_defs_[index - 1];
-        const std::string ns = get_string(type.type_namespace_index);
-        const std::string name = get_string(type.type_name_index);
-        return ns.empty() ? name : ns + "." + name;
+        return join_qualified_name(get_type_display_name(index - 1));
     }
     if (tag == 1) {
         if (index > type_refs_.size()) {
             return "TypeRef?" + std::to_string(index);
         }
         const auto& type = type_refs_[index - 1];
-        const std::string ns = get_string(type.type_namespace_index);
-        const std::string name = get_string(type.type_name_index);
-        return ns.empty() ? name : ns + "." + name;
+        return format_typeref_display_name(get_string(type.type_name_index),
+                                           get_string(type.type_namespace_index),
+                                           obfuscated_metadata_);
     }
     if (tag == 2) {
         if (index == 0 || index > type_specs_.size()) {
@@ -1079,19 +1215,16 @@ std::string CliMetadata::resolve_type_token(uint32_t token) const {
         if (index == 0 || index > type_defs_.size()) {
             return "TypeDef?" + std::to_string(index);
         }
-        const auto& type = type_defs_[index - 1];
-        const std::string ns = get_string(type.type_namespace_index);
-        const std::string name = get_string(type.type_name_index);
-        return ns.empty() ? name : ns + "." + name;
+        return join_qualified_name(get_type_display_name(index - 1));
     }
     if (table == 0x01) {
         if (index == 0 || index > type_refs_.size()) {
             return "TypeRef?" + std::to_string(index);
         }
         const auto& type = type_refs_[index - 1];
-        const std::string ns = get_string(type.type_namespace_index);
-        const std::string name = get_string(type.type_name_index);
-        return ns.empty() ? name : ns + "." + name;
+        return format_typeref_display_name(get_string(type.type_name_index),
+                                           get_string(type.type_namespace_index),
+                                           obfuscated_metadata_);
     }
     if (table == 0x1B) {
         if (index == 0 || index > type_specs_.size()) {
@@ -1110,7 +1243,7 @@ std::string CliMetadata::resolve_method_token(uint32_t token) const {
     }
     if (table == 0x06) {
         if (index > 0 && index <= method_defs_.size()) {
-            return get_string(method_defs_[index - 1].name_index);
+            return get_method_display_name(method_defs_[index - 1].name_index, index - 1);
         }
     }
     if (table == 0x02) {
@@ -1124,30 +1257,28 @@ std::string CliMetadata::resolve_member_ref(uint32_t index) const {
         return "member?" + std::to_string(index);
     }
     const auto& member = member_refs_[index - 1];
-    const std::string name = get_string(member.name_index);
+    const std::string name = format_member_display_name(get_string(member.name_index));
     const uint32_t tag = member.class_index & 0x7;
     const uint32_t parent_index = member.class_index >> 3;
     std::string declaring;
     switch (tag) {
         case 0:
             if (parent_index > 0 && parent_index <= type_defs_.size()) {
-                const auto& type = type_defs_[parent_index - 1];
-                const std::string ns = get_string(type.type_namespace_index);
-                const std::string type_name = get_string(type.type_name_index);
-                declaring = ns.empty() ? type_name : ns + "." + type_name;
+                declaring = join_qualified_name(get_type_display_name(parent_index - 1));
             }
             break;
         case 1:
             if (parent_index > 0 && parent_index <= type_refs_.size()) {
                 const auto& type = type_refs_[parent_index - 1];
-                const std::string ns = get_string(type.type_namespace_index);
-                const std::string type_name = get_string(type.type_name_index);
-                declaring = ns.empty() ? type_name : ns + "." + type_name;
+                declaring = format_typeref_display_name(get_string(type.type_name_index),
+                                                        get_string(type.type_namespace_index),
+                                                        obfuscated_metadata_);
             }
             break;
         case 3:
             if (parent_index > 0 && parent_index <= method_defs_.size()) {
-                declaring = get_string(method_defs_[parent_index - 1].name_index);
+                declaring = get_method_display_name(method_defs_[parent_index - 1].name_index,
+                                                    parent_index - 1);
             }
             break;
         default:

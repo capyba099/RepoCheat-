@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(csdecomp VERSION 0.1.15 LANGUAGES CXX)
+project(csdecomp VERSION 0.1.16 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +16,7 @@ add_executable(csdecomp
     src/il_opcode.cpp
     src/il_reader.cpp
     src/decompiler.cpp
+    src/metadata_names.cpp
 )
 
 target_include_directories(csdecomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -1,5 +1,7 @@
 #include "csdecomp/decompiler.hpp"
 
+#include "csdecomp/metadata_names.hpp"
+
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -51,24 +53,14 @@ std::string arg_name(uint32_t index, bool is_static, const std::vector<std::stri
 
 std::string local_name(uint32_t index) { return "loc" + std::to_string(index); }
 
-std::string method_display_name(const std::string& name, size_t method_index) {
+std::string format_type_identifier(const std::string& name) {
     if (name.empty()) {
-        return "Method_" + std::to_string(method_index + 1);
-    }
-    if (name == ".ctor" || name == ".cctor") {
         return name;
     }
     if (name[0] >= '0' && name[0] <= '9') {
         return "@" + name;
     }
-    return name;
-}
-
-std::string format_type_identifier(const std::string& name) {
-    if (name.empty()) {
-        return name;
-    }
-    if ((name[0] >= '0' && name[0] <= '9') || name.find('.') != std::string::npos) {
+    if (name[0] == '<' || name[0] == '>') {
         return "@" + name;
     }
     return name;
@@ -121,8 +113,9 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
     }
 
     const auto& type = metadata_.type_defs()[type_def_index];
-    const std::string ns = metadata_.get_string(type.type_namespace_index);
-    std::string name = metadata_.get_string(type.type_name_index);
+    const TypeDisplayName display = metadata_.get_type_display_name(type_def_index);
+    const std::string ns = display.namespace_name;
+    std::string name = display.name;
     if (name.empty()) {
         name = "Type_" + std::to_string(type_def_index + 1);
     }
@@ -147,7 +140,8 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
         try {
             const auto& field = metadata_.fields()[field_index];
             const auto sig = metadata_.decode_field_signature(field.signature_index);
-            const std::string field_name = metadata_.get_string(field.name_index);
+            const std::string field_name =
+                format_member_display_name(metadata_.get_string(field.name_index));
             out << indent(indent_level + 1) << format_field_flags(field.flags) << sig.type_name << " "
                 << format_type_identifier(field_name.empty() ? "field_" + std::to_string(field_index + 1)
                                                              : field_name)
@@ -162,7 +156,8 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
             continue;
         }
         const auto& property = metadata_.properties()[property_index];
-        const std::string property_name = metadata_.get_string(property.name_index);
+        const std::string property_name =
+            format_member_display_name(metadata_.get_string(property.name_index));
         out << indent(indent_level + 1) << "/* property */ "
             << format_type_identifier(property_name.empty() ? "Property_" + std::to_string(property_index + 1)
                                                             : property_name)
@@ -171,6 +166,9 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
 
     for (const size_t method_index : metadata_.methods_for_type(type_def_index)) {
         if (method_index >= metadata_.method_defs().size()) {
+            continue;
+        }
+        if (!metadata_.should_emit_method(method_index)) {
             continue;
         }
         try {
@@ -211,7 +209,8 @@ std::string Decompiler::decompile_method(size_t method_def_index, size_t type_de
     const auto& method = metadata_.method_defs()[method_def_index];
     const auto signature = metadata_.decode_method_signature(method.signature_index);
     const auto param_indices = metadata_.params_for_method(method_def_index);
-    const std::string method_name = method_display_name(metadata_.get_string(method.name_index), method_def_index);
+    const std::string method_name =
+        metadata_.get_method_display_name(method.name_index, method_def_index);
 
     std::vector<std::string> param_names;
     param_names.reserve(signature.param_types.size());
