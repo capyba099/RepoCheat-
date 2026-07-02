@@ -25,6 +25,18 @@ bool safe_row_range(size_t row_offset, uint32_t row_size, size_t table_size) {
     return row_size <= table_size - row_offset;
 }
 
+bool is_plausible_metadata_name(const std::string& name) {
+    if (name.empty() || name.size() > 512) {
+        return false;
+    }
+    for (unsigned char ch : name) {
+        if (ch < 0x20 || ch == 0x7F) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void append_rid_list(uint32_t start, uint32_t end, uint32_t max_rid, std::vector<size_t>& out) {
     if (start == 0 || end < start) {
         return;
@@ -75,7 +87,10 @@ CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
         if (!parse_tables_with_heap_sizes(heap_sizes)) {
             continue;
         }
-        const size_t score = score_method_rvas();
+        size_t score = score_metadata_layout();
+        if (heap_sizes == tables_heap_sizes_declared_) {
+            score += 50;
+        }
         if (score > best_score) {
             best_score = score;
             best_heap = heap_sizes;
@@ -115,43 +130,115 @@ void CliMetadata::clear_parsed_tables() {
     type_refs_.clear();
     type_specs_.clear();
     nested_classes_.clear();
+    field_ptrs_.clear();
+    method_ptrs_.clear();
+    param_ptrs_.clear();
+    properties_.clear();
+    property_maps_.clear();
     valid_tables_.clear();
     table_row_sizes_.clear();
     table_offsets_.clear();
 }
 
-size_t CliMetadata::score_method_rvas() const {
-    if (method_defs_.empty()) {
-        return type_defs_.empty() ? 0 : 1;
+bool CliMetadata::has_table(TableId id) const {
+    const int table_index = static_cast<int>(id);
+    return table_index >= 0 && table_index < 64 && ((tables_valid_ >> table_index) & 1ULL) != 0;
+}
+
+size_t CliMetadata::score_metadata_layout() const {
+    size_t score = 0;
+
+    for (const auto& type : type_defs_) {
+        const std::string name = get_string(type.type_name_index);
+        const std::string ns = get_string(type.type_namespace_index);
+        if (is_plausible_metadata_name(name)) {
+            score += 8;
+        }
+        if (is_plausible_metadata_name(ns)) {
+            score += 4;
+        }
+        const std::string base = resolve_type_name(type.extends_index);
+        if (!base.empty() && base.find('?') == std::string::npos) {
+            score += 2;
+        }
     }
 
-    size_t checked = 0;
-    size_t valid = 0;
-    const size_t image_limit = pe_.raw().size() + 0x100000;
+    for (const auto& type_ref : type_refs_) {
+        const std::string name = get_string(type_ref.type_name_index);
+        if (is_plausible_metadata_name(name)) {
+            score += 1;
+        }
+    }
 
+    size_t checked_methods = 0;
     for (const auto& method : method_defs_) {
         if (method.rva == 0) {
             continue;
         }
-        ++checked;
-        if (method.rva >= image_limit) {
-            continue;
-        }
+        ++checked_methods;
         try {
-            if (pe_.max_read_size_at_rva(method.rva) > 0) {
-                ++valid;
+            const size_t max_size = pe_.max_read_size_at_rva(method.rva);
+            if (max_size == 0) {
+                continue;
+            }
+            const size_t peek_size = std::min(max_size, static_cast<size_t>(12));
+            const auto header_bytes = pe_.read_at_rva(method.rva, peek_size);
+            parse_method_header(header_bytes, max_size);
+            score += 120;
+            const std::string name = get_string(method.name_index);
+            if (is_plausible_metadata_name(name)) {
+                score += 6;
             }
         } catch (const std::exception&) {
         }
-        if (checked >= 64) {
+        if (checked_methods >= 256) {
             break;
         }
     }
 
-    if (checked == 0) {
-        return 1;
+    if (!method_defs_.empty() && checked_methods == 0) {
+        score /= 4;
     }
-    return valid;
+    return score;
+}
+
+uint32_t CliMetadata::resolve_field_rid(uint32_t list_index) const {
+    if (list_index == 0) {
+        return 0;
+    }
+    if (has_table(TableId::FieldPtr)) {
+        if (list_index > field_ptrs_.size()) {
+            return 0;
+        }
+        return field_ptrs_[list_index - 1];
+    }
+    return list_index;
+}
+
+uint32_t CliMetadata::resolve_method_rid(uint32_t list_index) const {
+    if (list_index == 0) {
+        return 0;
+    }
+    if (has_table(TableId::MethodPtr)) {
+        if (list_index > method_ptrs_.size()) {
+            return 0;
+        }
+        return method_ptrs_[list_index - 1];
+    }
+    return list_index;
+}
+
+uint32_t CliMetadata::resolve_param_rid(uint32_t list_index) const {
+    if (list_index == 0) {
+        return 0;
+    }
+    if (has_table(TableId::ParamPtr)) {
+        if (list_index > param_ptrs_.size()) {
+            return 0;
+        }
+        return param_ptrs_[list_index - 1];
+    }
+    return list_index;
 }
 
 bool CliMetadata::parse_tables_with_heap_sizes(uint8_t heap_sizes) {
@@ -376,6 +463,24 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
         size_t pos = 0;
 
         switch (id) {
+            case TableId::FieldPtr: {
+                const uint32_t field_index =
+                    read_index(row_data, pos, simple_index_size(row_counts_[4]));
+                field_ptrs_.push_back(field_index);
+                break;
+            }
+            case TableId::MethodPtr: {
+                const uint32_t method_index =
+                    read_index(row_data, pos, simple_index_size(row_counts_[6]));
+                method_ptrs_.push_back(method_index);
+                break;
+            }
+            case TableId::ParamPtr: {
+                const uint32_t param_index =
+                    read_index(row_data, pos, simple_index_size(row_counts_[8]));
+                param_ptrs_.push_back(param_index);
+                break;
+            }
             case TableId::TypeDef: {
                 TypeDefRow entry{};
                 entry.flags = read_index(row_data, pos, 4);
@@ -444,6 +549,21 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
                 entry.nested_class_index = read_index(row_data, pos, simple_index_size(row_counts_[2]));
                 entry.enclosing_class_index = read_index(row_data, pos, simple_index_size(row_counts_[2]));
                 nested_classes_.push_back(entry);
+                break;
+            }
+            case TableId::Property: {
+                PropertyRow entry{};
+                entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
+                entry.name_index = read_index(row_data, pos, str_idx);
+                entry.type_index = read_index(row_data, pos, blob_idx);
+                properties_.push_back(entry);
+                break;
+            }
+            case TableId::PropertyMap: {
+                PropertyMapRow entry{};
+                entry.parent_index = read_index(row_data, pos, simple_index_size(row_counts_[2]));
+                entry.property_list_index = read_index(row_data, pos, simple_index_size(row_counts_[23]));
+                property_maps_.push_back(entry);
                 break;
             }
             default:
@@ -850,10 +970,10 @@ std::vector<size_t> CliMetadata::fields_for_type(size_t type_def_index) const {
     if (type_def_index >= type_defs_.size()) {
         return result;
     }
-    const uint32_t start = type_defs_[type_def_index].field_list_index;
-    const uint32_t end =
+    const uint32_t start = resolve_field_rid(type_defs_[type_def_index].field_list_index);
+    const uint32_t end = resolve_field_rid(
         (type_def_index + 1 < type_defs_.size()) ? type_defs_[type_def_index + 1].field_list_index
-                                                 : static_cast<uint32_t>(fields_.size() + 1);
+                                                 : static_cast<uint32_t>(fields_.size() + 1));
     append_rid_list(start, end, static_cast<uint32_t>(fields_.size()), result);
     return result;
 }
@@ -863,10 +983,10 @@ std::vector<size_t> CliMetadata::methods_for_type(size_t type_def_index) const {
     if (type_def_index >= type_defs_.size()) {
         return result;
     }
-    const uint32_t start = type_defs_[type_def_index].method_list_index;
-    const uint32_t end = (type_def_index + 1 < type_defs_.size())
-                             ? type_defs_[type_def_index + 1].method_list_index
-                             : static_cast<uint32_t>(method_defs_.size() + 1);
+    const uint32_t start = resolve_method_rid(type_defs_[type_def_index].method_list_index);
+    const uint32_t end = resolve_method_rid(
+        (type_def_index + 1 < type_defs_.size()) ? type_defs_[type_def_index + 1].method_list_index
+                                                 : static_cast<uint32_t>(method_defs_.size() + 1));
     append_rid_list(start, end, static_cast<uint32_t>(method_defs_.size()), result);
     return result;
 }
@@ -876,10 +996,10 @@ std::vector<size_t> CliMetadata::params_for_method(size_t method_def_index) cons
     if (method_def_index >= method_defs_.size()) {
         return result;
     }
-    const uint32_t start = method_defs_[method_def_index].param_list_index;
-    const uint32_t end = (method_def_index + 1 < method_defs_.size())
-                             ? method_defs_[method_def_index + 1].param_list_index
-                             : static_cast<uint32_t>(params_.size() + 1);
+    const uint32_t start = resolve_param_rid(method_defs_[method_def_index].param_list_index);
+    const uint32_t end = resolve_param_rid(
+        (method_def_index + 1 < method_defs_.size()) ? method_defs_[method_def_index + 1].param_list_index
+                                                       : static_cast<uint32_t>(params_.size() + 1));
     append_rid_list(start, end, static_cast<uint32_t>(params_.size()), result);
     return result;
 }
@@ -891,6 +1011,27 @@ std::vector<size_t> CliMetadata::nested_types_for_type(size_t type_def_index) co
         if (nested_classes_[i].enclosing_class_index == target) {
             result.push_back(i);
         }
+    }
+    return result;
+}
+
+std::vector<size_t> CliMetadata::properties_for_type(size_t type_def_index) const {
+    std::vector<size_t> result;
+    if (!has_table(TableId::Property) || property_maps_.empty()) {
+        return result;
+    }
+
+    const uint32_t target = static_cast<uint32_t>(type_def_index + 1);
+    for (size_t map_index = 0; map_index < property_maps_.size(); ++map_index) {
+        if (property_maps_[map_index].parent_index != target) {
+            continue;
+        }
+        const uint32_t start = property_maps_[map_index].property_list_index;
+        const uint32_t end = (map_index + 1 < property_maps_.size())
+                                 ? property_maps_[map_index + 1].property_list_index
+                                 : static_cast<uint32_t>(properties_.size() + 1);
+        append_rid_list(start, end, static_cast<uint32_t>(properties_.size()), result);
+        break;
     }
     return result;
 }

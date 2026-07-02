@@ -55,11 +55,21 @@ std::string method_display_name(const std::string& name, size_t method_index) {
     if (name.empty()) {
         return "Method_" + std::to_string(method_index + 1);
     }
-    if (name == ".ctor") {
+    if (name == ".ctor" || name == ".cctor") {
         return name;
     }
-    if (name == ".cctor") {
+    if (name[0] >= '0' && name[0] <= '9') {
+        return "@" + name;
+    }
+    return name;
+}
+
+std::string format_type_identifier(const std::string& name) {
+    if (name.empty()) {
         return name;
+    }
+    if ((name[0] >= '0' && name[0] <= '9') || name.find('.') != std::string::npos) {
+        return "@" + name;
     }
     return name;
 }
@@ -99,6 +109,12 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
 
 void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
                                 const DecompileOptions& options) const {
+    decompile_type_impl(out, type_def_index, options, true, 0);
+}
+
+void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
+                                     const DecompileOptions& options, bool emit_namespace,
+                                     int indent_level) const {
     if (type_def_index >= metadata_.type_defs().size()) {
         out << "// Skipped invalid type index " << type_def_index << "\n";
         return;
@@ -112,12 +128,13 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
     }
     const std::string base_type = metadata_.resolve_type_name(type.extends_index);
 
-    if (!ns.empty()) {
+    if (emit_namespace && !ns.empty()) {
         out << "namespace " << ns << "\n{\n";
+        indent_level += 1;
     }
 
-    const int indent_level = ns.empty() ? 0 : 1;
-    out << indent(indent_level) << format_type_flags(type.flags) << "class " << name;
+    out << indent(indent_level) << format_type_flags(type.flags) << "class "
+        << format_type_identifier(name);
     if (!base_type.empty() && base_type != "object" && base_type != "System.Object") {
         out << " : " << base_type;
     }
@@ -130,11 +147,26 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
         try {
             const auto& field = metadata_.fields()[field_index];
             const auto sig = metadata_.decode_field_signature(field.signature_index);
+            const std::string field_name = metadata_.get_string(field.name_index);
             out << indent(indent_level + 1) << format_field_flags(field.flags) << sig.type_name << " "
-                << metadata_.get_string(field.name_index) << ";\n";
+                << format_type_identifier(field_name.empty() ? "field_" + std::to_string(field_index + 1)
+                                                             : field_name)
+                << ";\n";
         } catch (const std::exception& ex) {
             out << indent(indent_level + 1) << "// Failed to decompile field: " << ex.what() << "\n";
         }
+    }
+
+    for (const size_t property_index : metadata_.properties_for_type(type_def_index)) {
+        if (property_index >= metadata_.properties().size()) {
+            continue;
+        }
+        const auto& property = metadata_.properties()[property_index];
+        const std::string property_name = metadata_.get_string(property.name_index);
+        out << indent(indent_level + 1) << "/* property */ "
+            << format_type_identifier(property_name.empty() ? "Property_" + std::to_string(property_index + 1)
+                                                            : property_name)
+            << ";\n";
     }
 
     for (const size_t method_index : metadata_.methods_for_type(type_def_index)) {
@@ -158,14 +190,14 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
                 out << indent(indent_level + 1) << "// Skipped invalid nested type reference\n";
                 continue;
             }
-            decompile_type(out, nested_rid - 1, options);
+            decompile_type_impl(out, nested_rid - 1, options, false, indent_level + 1);
         } catch (const std::exception& ex) {
             out << indent(indent_level + 1) << "// Failed to decompile nested type: " << ex.what() << "\n";
         }
     }
 
     out << indent(indent_level) << "}\n";
-    if (!ns.empty()) {
+    if (emit_namespace && !ns.empty()) {
         out << "}\n";
     }
 }

@@ -14,8 +14,11 @@ enum class TableId : uint8_t {
     Module = 0,
     TypeRef = 1,
     TypeDef = 2,
+    FieldPtr = 3,
     Field = 4,
+    MethodPtr = 5,
     MethodDef = 6,
+    ParamPtr = 7,
     Param = 8,
     InterfaceImpl = 9,
     MemberRef = 10,
@@ -24,6 +27,8 @@ enum class TableId : uint8_t {
     StandAloneSig = 17,
     Event = 20,
     Property = 23,
+    MethodSemantics = 24,
+    PropertyMap = 21,
     ModuleRef = 26,
     TypeSpec = 27,
     Assembly = 32,
@@ -82,6 +87,17 @@ struct NestedClassRow {
     uint32_t enclosing_class_index{0};
 };
 
+struct PropertyRow {
+    uint16_t flags{0};
+    uint32_t name_index{0};
+    uint32_t type_index{0};
+};
+
+struct PropertyMapRow {
+    uint32_t parent_index{0};
+    uint32_t property_list_index{0};
+};
+
 struct MethodSignature {
     bool has_this{false};
     bool explicit_this{false};
@@ -111,6 +127,7 @@ public:
     [[nodiscard]] const std::vector<TypeRefRow>& type_refs() const { return type_refs_; }
     [[nodiscard]] const std::vector<TypeSpecRow>& type_specs() const { return type_specs_; }
     [[nodiscard]] const std::vector<NestedClassRow>& nested_classes() const { return nested_classes_; }
+    [[nodiscard]] const std::vector<PropertyRow>& properties() const { return properties_; }
 
     [[nodiscard]] std::string resolve_type_name(uint32_t coded_index) const;
     [[nodiscard]] std::string resolve_member_ref(uint32_t index) const;
@@ -124,15 +141,20 @@ public:
     [[nodiscard]] std::vector<size_t> methods_for_type(size_t type_def_index) const;
     [[nodiscard]] std::vector<size_t> params_for_method(size_t method_def_index) const;
     [[nodiscard]] std::vector<size_t> nested_types_for_type(size_t type_def_index) const;
+    [[nodiscard]] std::vector<size_t> properties_for_type(size_t type_def_index) const;
 
 private:
     void parse_metadata_root();
     void read_tables_header();
     void clear_parsed_tables();
     bool parse_tables_with_heap_sizes(uint8_t heap_sizes);
-    size_t score_method_rvas() const;
+    size_t score_metadata_layout() const;
 
     void read_table_rows(TableId id, size_t row_count);
+    [[nodiscard]] bool has_table(TableId id) const;
+    [[nodiscard]] uint32_t resolve_field_rid(uint32_t list_index) const;
+    [[nodiscard]] uint32_t resolve_method_rid(uint32_t list_index) const;
+    [[nodiscard]] uint32_t resolve_param_rid(uint32_t list_index) const;
 
     uint32_t coded_index_size(uint32_t max_rows, uint32_t tag_bits) const;
     uint32_t simple_index_size(uint32_t max_rows) const;
@@ -172,6 +194,11 @@ private:
     std::vector<TypeRefRow> type_refs_;
     std::vector<TypeSpecRow> type_specs_;
     std::vector<NestedClassRow> nested_classes_;
+    std::vector<uint32_t> field_ptrs_;
+    std::vector<uint32_t> method_ptrs_;
+    std::vector<uint32_t> param_ptrs_;
+    std::vector<PropertyRow> properties_;
+    std::vector<PropertyMapRow> property_maps_;
 };
 
 }  // namespace csdecomp

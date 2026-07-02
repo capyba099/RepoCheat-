@@ -24,6 +24,8 @@ public:
                                  const DecompileOptions& options = {}) const;
 
 private:
+    void decompile_type_impl(std::ostream& out, size_t type_def_index, const DecompileOptions& options,
+                             bool emit_namespace, int indent_level) const;
     std::string decompile_method_body(size_t method_def_index, size_t type_def_index,
                                       const DecompileOptions& options,
                                       const std::vector<std::string>& param_names) const;
