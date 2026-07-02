@@ -27,7 +27,21 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-Готовый `csdecomp.exe` для Windows можно скачать в [Releases](https://github.com/capyba099/RepoCheat-/releases).
+## Скачать готовый .exe (Windows)
+
+**Прямая ссылка на последнюю версию:**
+
+**[Скачать csdecomp.exe](https://github.com/capyba099/RepoCheat-/releases/latest/download/csdecomp.exe)**
+
+На странице [Releases](https://github.com/capyba099/RepoCheat-/releases) откройте последний релиз (например `v0.1.11`) и в блоке **Assets** выберите файл **`csdecomp.exe`**.
+
+| Что скачивать | Что это |
+|---------------|---------|
+| **`csdecomp.exe`** | Готовая программа для Windows |
+| `csdecomp-linux-x64` | Версия для Linux |
+| `Source code (zip)` | Только исходники — **без** `.exe` |
+
+Если в Assets пока только «Source code» — подождите ~1 минуту после публикации тега и обновите страницу (CI собирает `.exe`).
 
 ## Использование
 

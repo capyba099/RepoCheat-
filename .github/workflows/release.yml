@@ -9,7 +9,36 @@ permissions:
   contents: write
 
 jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release (no assets yet)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            Сборка идёт… Подождите ~1 минуту и обновите страницу.
+
+            ## Windows — скачать .exe
+            Файл **`csdecomp.exe`** появится в **Assets** ниже (не «Source code (zip)»).
+
+            Прямая ссылка (после сборки):
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/csdecomp.exe
+
+            ## Linux
+            Файл **`csdecomp-linux-x64`** в Assets.
+
+            ---
+            Build in progress… Refresh this page in ~1 minute.
+
+            Download **`csdecomp.exe`** from **Assets** below (not the Source code zip).
+
   build:
+    needs: draft
     strategy:
       matrix:
         include:
@@ -58,19 +87,38 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create GitHub Release
+      - name: Publish release with binaries
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          make_latest: true
+          fail_on_unmatched_files: true
           files: |
             artifacts/csdecomp-linux-x64/csdecomp-linux-x64
             artifacts/csdecomp.exe/csdecomp.exe
-          generate_release_notes: true
           body: |
-            ## Windows
-            Download **`csdecomp.exe`** from **Assets** below (not the Source code zip).
+            ## Скачать Windows (.exe)
 
-            The `.exe` file is uploaded by CI ~1 minute after the tag is created.
-            If you only see `Source code (zip)` — refresh the page in a minute.
+            Нажмите **`csdecomp.exe`** в блоке **Assets** внизу страницы.
+
+            **Не скачивайте** «Source code (zip)» — там нет готового `.exe`, только исходники.
+
+            Прямая ссылка: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/csdecomp.exe
 
             ## Linux
+
+            Скачайте **`csdecomp-linux-x64`** из Assets.
+
+            Прямая ссылка: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/csdecomp-linux-x64
+
+            ---
+            ## Windows (.exe)
+
+            Download **`csdecomp.exe`** from **Assets** below — not «Source code (zip)».
+
+            Direct link: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/csdecomp.exe
+
+            ## Linux
+
             Download **`csdecomp-linux-x64`** from Assets.
