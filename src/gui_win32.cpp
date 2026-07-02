@@ -63,12 +63,42 @@ void on_decompile_done(std::wstring* message);
 void on_decompile_error(std::wstring* message);
 void post_decompile_error(const std::wstring& text);
 LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info);
+PVOID g_vectored_handler = nullptr;
 
 constexpr DWORD kMsvcCppException = 0xE06D7363;
 
 bool is_cpp_exception_code(DWORD code) {
-    // MinGW/GCC uses SEH for C++ exceptions; low 24 bits spell "GCC".
     return code == kMsvcCppException || (code & 0x00FFFFFFU) == 0x00474343U;
+}
+
+bool is_recoverable_hardware_exception(DWORD code) {
+    return code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR ||
+           code == EXCEPTION_ARRAY_BOUNDS_EXCEEDED || code == EXCEPTION_STACK_OVERFLOW;
+}
+
+LONG CALLBACK gui_vectored_exception_handler(EXCEPTION_POINTERS* info) {
+    if (!g_decompile_worker_active || info == nullptr || info->ExceptionRecord == nullptr) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (is_cpp_exception_code(code)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (!is_recoverable_hardware_exception(code)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    wchar_t buffer[512]{};
+    std::swprintf(buffer, 512,
+                  L"Memory access error while decompiling.\n\n"
+                  L"Exception code: 0x%08lX\n\n"
+                  L"The assembly may be corrupted or use unsupported metadata.",
+                  static_cast<unsigned long>(code));
+    post_decompile_error(buffer);
+    g_decompile_worker_active = false;
+    ExitThread(1);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void post_decompile_error(const std::wstring& text) {
@@ -426,6 +456,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             on_decompile_error(reinterpret_cast<std::wstring*>(lparam));
             return 0;
         case WM_DESTROY:
+            if (g_vectored_handler != nullptr) {
+                RemoveVectoredExceptionHandler(g_vectored_handler);
+                g_vectored_handler = nullptr;
+            }
             if (g_worker_thread != nullptr) {
                 WaitForSingleObject(g_worker_thread, INFINITE);
                 CloseHandle(g_worker_thread);
@@ -451,6 +485,7 @@ int run_win32_gui() {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     std::set_terminate(gui_terminate_handler);
     SetUnhandledExceptionFilter(gui_unhandled_exception_filter);
+    g_vectored_handler = AddVectoredExceptionHandler(1, gui_vectored_exception_handler);
 
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(controls);

@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 
 namespace csdecomp {
@@ -196,14 +197,23 @@ void CliMetadata::parse_tables() {
     set_row_size(52, str_idx + blob_idx);  // LocalConstant
     set_row_size(53, simple(53) + blob_idx);  // ImportScope
     set_row_size(54, simple(6) + simple(49));  // StateMachineMethod
-    set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 2) + blob_idx);  // CustomDebugInformation
+    set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 3) + blob_idx);  // CustomDebugInformation
 
     size_t offset = 0;
     for (int i = 0; i < 64; ++i) {
         if (((valid >> i) & 1ULL) != 0) {
+            if (row_counts_[i] > 0 && table_row_sizes_[i] == 0) {
+                throw std::runtime_error("unsupported metadata table 0x" +
+                                         std::to_string(i) + " is present");
+            }
             table_offsets_[i] = static_cast<uint32_t>(offset);
             offset += static_cast<size_t>(table_row_sizes_[i]) * row_counts_[i];
         }
+    }
+
+    const size_t available_table_bytes = tables_data_.size() - tables_start;
+    if (offset > available_table_bytes) {
+        throw std::runtime_error("metadata tables exceed #~ stream size");
     }
 
     reader.seek(tables_start + offset);
@@ -258,7 +268,12 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
     };
 
     for (size_t row = 0; row < row_count; ++row) {
-        const uint8_t* row_data = valid_tables_.data() + base + row * row_size;
+        const size_t row_offset = base + row * row_size;
+        if (row_size == 0 || row_offset + row_size > valid_tables_.size()) {
+            throw std::runtime_error("metadata row read out of bounds in table 0x" +
+                                     std::to_string(table_index));
+        }
+        const uint8_t* row_data = valid_tables_.data() + row_offset;
         size_t pos = 0;
 
         switch (id) {

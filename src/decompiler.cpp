@@ -105,6 +105,9 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
     out << "\n" << indent(indent_level) << "{\n";
 
     for (const size_t field_index : metadata_.fields_for_type(type_def_index)) {
+        if (field_index >= metadata_.fields().size()) {
+            continue;
+        }
         try {
             const auto& field = metadata_.fields()[field_index];
             const auto sig = metadata_.decode_field_signature(field.signature_index);
@@ -116,6 +119,9 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
     }
 
     for (const size_t method_index : metadata_.methods_for_type(type_def_index)) {
+        if (method_index >= metadata_.method_defs().size()) {
+            continue;
+        }
         try {
             out << decompile_method(method_index, type_def_index, options);
         } catch (const std::exception& ex) {
@@ -124,6 +130,9 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
     }
 
     for (const size_t nested_index : metadata_.nested_types_for_type(type_def_index)) {
+        if (nested_index >= metadata_.nested_classes().size()) {
+            continue;
+        }
         try {
             const uint32_t nested_type = metadata_.nested_classes()[nested_index].nested_class_index - 1;
             decompile_type(out, nested_type, options);
@@ -235,6 +244,14 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
     auto push = [&](const std::string& value) { stack.push_back(value); };
 
     auto emit = [&](const std::string& line) { statements.push_back(indent(2) + line); };
+
+    auto label_name = [&](int32_t target) -> std::string {
+        const auto it = labels.find(target);
+        if (it != labels.end()) {
+            return it->second;
+        }
+        return "IL_" + std::to_string(target);
+    };
 
     for (const auto& insn : il.instructions()) {
         if (label_targets.count(static_cast<int32_t>(insn.offset)) != 0) {
@@ -618,7 +635,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             } else {
                 cmp = left + " <= " + right;
             }
-            emit("if (" + cmp + ") goto " + labels[target] + ";");
+            emit("if (" + cmp + ") goto " + label_name(target) + ";");
             continue;
         }
 
@@ -629,7 +646,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             } else if (std::holds_alternative<int32_t>(insn.operand)) {
                 target = branch_target(std::get<int32_t>(insn.operand), insn.offset + 5);
             }
-            emit("goto " + labels[target] + ";");
+            emit("goto " + label_name(target) + ";");
             continue;
         }
         if (op == "brfalse" || op == "brfalse.s") {
@@ -640,7 +657,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             } else if (std::holds_alternative<int32_t>(insn.operand)) {
                 target = branch_target(std::get<int32_t>(insn.operand), insn.offset + 5);
             }
-            emit("if (!(" + cond + ")) goto " + labels[target] + ";");
+            emit("if (!(" + cond + ")) goto " + label_name(target) + ";");
             continue;
         }
         if (op == "brtrue" || op == "brtrue.s") {
@@ -651,7 +668,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             } else if (std::holds_alternative<int32_t>(insn.operand)) {
                 target = branch_target(std::get<int32_t>(insn.operand), insn.offset + 5);
             }
-            emit("if (" + cond + ") goto " + labels[target] + ";");
+            emit("if (" + cond + ") goto " + label_name(target) + ";");
             continue;
         }
         if (op == "beq" || op == "beq.s") {
@@ -663,7 +680,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             } else if (std::holds_alternative<int32_t>(insn.operand)) {
                 target = branch_target(std::get<int32_t>(insn.operand), insn.offset + 5);
             }
-            emit("if (" + left + " == " + right + ") goto " + labels[target] + ";");
+            emit("if (" + left + " == " + right + ") goto " + label_name(target) + ";");
             continue;
         }
         if (op == "bne.un.s") {
@@ -673,7 +690,7 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
             if (std::holds_alternative<int8_t>(insn.operand)) {
                 target = branch_target(std::get<int8_t>(insn.operand), insn.offset + 2);
             }
-            emit("if (" + left + " != " + right + ") goto " + labels[target] + ";");
+            emit("if (" + left + " != " + right + ") goto " + label_name(target) + ";");
             continue;
         }
 
