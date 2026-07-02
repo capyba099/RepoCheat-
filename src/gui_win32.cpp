@@ -12,7 +12,10 @@
 
 #include "csdecomp/decompile_service.hpp"
 
+#include <cstdio>
+#include <exception>
 #include <memory>
+#include <new>
 #include <string>
 
 namespace csdecomp {
@@ -36,6 +39,8 @@ constexpr int kRowHeight = 24;
 constexpr int kClientWidth = 520;
 constexpr int kClientHeight = 360;
 
+constexpr SIZE_T kWorkerStackSize = 16 * 1024 * 1024;
+
 HWND g_window = nullptr;
 HWND g_input_edit = nullptr;
 HWND g_output_edit = nullptr;
@@ -43,6 +48,8 @@ HWND g_il_comments = nullptr;
 HWND g_status_edit = nullptr;
 HFONT g_ui_font = nullptr;
 HANDLE g_worker_thread = nullptr;
+DWORD g_worker_thread_id = 0;
+volatile bool g_decompile_worker_active = false;
 
 struct DecompileWorkerPayload {
     DecompileRequest request;
@@ -54,6 +61,88 @@ void set_status(const std::wstring& text);
 void set_ui_busy(bool busy);
 void on_decompile_done(std::wstring* message);
 void on_decompile_error(std::wstring* message);
+void post_decompile_error(const std::wstring& text);
+LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info);
+PVOID g_vectored_handler = nullptr;
+
+LONG CALLBACK gui_vectored_exception_handler(EXCEPTION_POINTERS* info) {
+    if (!g_decompile_worker_active || info == nullptr || info->ExceptionRecord == nullptr) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    wchar_t buffer[512]{};
+    std::swprintf(buffer, 512,
+                  L"Critical error while decompiling.\n\n"
+                  L"Exception code: 0x%08lX\n\n"
+                  L"The assembly may be corrupted, obfuscated, or too complex.",
+                  static_cast<unsigned long>(code));
+    post_decompile_error(buffer);
+    g_decompile_worker_active = false;
+    ExitThread(1);
+}
+
+void post_decompile_error(const std::wstring& text) {
+    auto* message = new std::wstring(text);
+    if (g_window != nullptr) {
+        PostMessageW(g_window, WM_DECOMPILE_ERROR, 0, reinterpret_cast<LPARAM>(message));
+    } else {
+        MessageBoxW(nullptr, message->c_str(), L"csdecomp", MB_ICONERROR | MB_OK);
+        delete message;
+    }
+}
+
+LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
+    wchar_t buffer[512]{};
+    const unsigned long code =
+        info != nullptr && info->ExceptionRecord != nullptr
+            ? static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode)
+            : 0UL;
+    std::swprintf(buffer, 512,
+                  L"csdecomp crashed.\n\nException code: 0x%08lX\n\n"
+                  L"The assembly may be corrupted, obfuscated, or too large.",
+                  code);
+    MessageBoxW(g_window, buffer, L"csdecomp", MB_ICONERROR | MB_OK);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+[[noreturn]] void gui_terminate_handler() {
+    MessageBoxW(g_window,
+                L"Unexpected termination during decompilation.\n\n"
+                L"This often happens when the process runs out of memory.",
+                L"csdecomp", MB_ICONERROR | MB_OK);
+    std::abort();
+}
+
+void run_decompile_job(DecompileWorkerPayload* payload) {
+    g_decompile_worker_active = true;
+    try {
+        decompile_to_file(payload->request);
+        auto* message = new std::wstring(L"Saved to:\n" + payload->output_path);
+        PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(message));
+    } catch (const std::bad_alloc&) {
+        post_decompile_error(
+            L"Out of memory while decompiling.\n\n"
+            L"Try a smaller assembly or close other programs.");
+    } catch (const std::exception& ex) {
+        post_decompile_error(utf8_to_wide(ex.what()));
+    } catch (...) {
+        post_decompile_error(L"Unknown error during decompilation.");
+    }
+    g_decompile_worker_active = false;
+}
+
+DWORD WINAPI decompile_worker_thread(LPVOID param) {
+    auto* payload = static_cast<DecompileWorkerPayload*>(param);
+    g_worker_thread_id = GetCurrentThreadId();
+    run_decompile_job(payload);
+    delete payload;
+    return 0;
+}
 
 void set_ui_busy(bool busy) {
     const BOOL enable = busy ? FALSE : TRUE;
@@ -63,23 +152,6 @@ void set_ui_busy(bool busy) {
     EnableWindow(g_input_edit, enable);
     EnableWindow(g_output_edit, enable);
     EnableWindow(g_il_comments, enable);
-}
-
-DWORD WINAPI decompile_worker_thread(LPVOID param) {
-    auto* payload = static_cast<DecompileWorkerPayload*>(param);
-    try {
-        decompile_to_file(payload->request);
-        auto* message = new std::wstring(L"Saved to:\n" + payload->output_path);
-        PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(message));
-    } catch (const std::exception& ex) {
-        auto* message = new std::wstring(utf8_to_wide(ex.what()));
-        PostMessageW(g_window, WM_DECOMPILE_ERROR, 0, reinterpret_cast<LPARAM>(message));
-    } catch (...) {
-        auto* message = new std::wstring(L"Unknown error during decompilation.");
-        PostMessageW(g_window, WM_DECOMPILE_ERROR, 0, reinterpret_cast<LPARAM>(message));
-    }
-    delete payload;
-    return 0;
 }
 
 void on_decompile_done(std::wstring* message) {
@@ -290,7 +362,8 @@ void on_decompile() {
     set_ui_busy(true);
     set_status(L"Decompiling... (this may take a while for large assemblies)");
 
-    g_worker_thread = CreateThread(nullptr, 0, decompile_worker_thread, payload, 0, nullptr);
+    g_worker_thread =
+        CreateThread(nullptr, kWorkerStackSize, decompile_worker_thread, payload, 0, nullptr);
     if (g_worker_thread == nullptr) {
         set_ui_busy(false);
         delete payload;
@@ -361,6 +434,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             on_decompile_error(reinterpret_cast<std::wstring*>(lparam));
             return 0;
         case WM_DESTROY:
+            if (g_vectored_handler != nullptr) {
+                RemoveVectoredExceptionHandler(g_vectored_handler);
+                g_vectored_handler = nullptr;
+            }
             if (g_worker_thread != nullptr) {
                 WaitForSingleObject(g_worker_thread, INFINITE);
                 CloseHandle(g_worker_thread);
@@ -382,6 +459,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 
 int run_win32_gui() {
     FreeConsole();
+
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    std::set_terminate(gui_terminate_handler);
+    SetUnhandledExceptionFilter(gui_unhandled_exception_filter);
+    g_vectored_handler = AddVectoredExceptionHandler(1, gui_vectored_exception_handler);
 
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(controls);
