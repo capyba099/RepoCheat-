@@ -1,4 +1,6 @@
 /build/
+/build-mingw/
+/build-win/
 decompiled.cs
 samples/SampleApp/bin/
 samples/SampleApp/obj/

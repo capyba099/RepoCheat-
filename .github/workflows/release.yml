@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: csdecomp-linux-x64
+            cmake_extra: ""
+          - os: windows-latest
+            artifact: csdecomp-win-x64.exe
+            cmake_extra: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_extra }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cp build/csdecomp ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [ -f build/Release/csdecomp.exe ]; then
+            cp build/Release/csdecomp.exe ${{ matrix.artifact }}
+          else
+            cp build/csdecomp.exe ${{ matrix.artifact }}
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/csdecomp-linux-x64/csdecomp-linux-x64
+            artifacts/csdecomp-win-x64.exe/csdecomp-win-x64.exe
+          generate_release_notes: true

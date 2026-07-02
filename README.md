@@ -20,12 +20,25 @@ cmake -S . -B build
 cmake --build build
 ```
 
+На Windows с Visual Studio или MinGW:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+Готовый `csdecomp.exe` для Windows можно скачать в [Releases](https://github.com/capyba099/RepoCheat-/releases).
+
 ## Использование
 
 ```bash
+# Linux
 ./build/csdecomp path/to/assembly.dll
-./build/csdecomp path/to/assembly.dll -o output.cs
-./build/csdecomp path/to/assembly.dll --il-comments
+
+# Windows
+csdecomp.exe path\to\assembly.dll
+csdecomp.exe path\to\assembly.dll -o output.cs
+csdecomp.exe path\to\assembly.dll --il-comments
 ```
 
 ## Тестовый пример
