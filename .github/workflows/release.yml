@@ -65,3 +65,12 @@ jobs:
             artifacts/csdecomp-linux-x64/csdecomp-linux-x64
             artifacts/csdecomp.exe/csdecomp.exe
           generate_release_notes: true
+          body: |
+            ## Windows
+            Download **`csdecomp.exe`** from **Assets** below (not the Source code zip).
+
+            The `.exe` file is uploaded by CI ~1 minute after the tag is created.
+            If you only see `Source code (zip)` — refresh the page in a minute.
+
+            ## Linux
+            Download **`csdecomp-linux-x64`** from Assets.
