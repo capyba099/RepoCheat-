@@ -1,6 +1,7 @@
 #include "csdecomp/decompiler.hpp"
 
 #include "csdecomp/metadata_names.hpp"
+#include "csdecomp/structured_decompiler.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -108,6 +109,10 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
               });
 
     for (const size_t type_index : root_types) {
+        const TypeDisplayName display = metadata_.get_type_display_name(type_index);
+        if (is_obfuscated_stub_type(display)) {
+            continue;
+        }
         try {
             decompile_type(out, type_index, options);
             out << "\n";
@@ -131,8 +136,12 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
         return;
     }
 
-    const auto& type = metadata_.type_defs()[type_def_index];
     const TypeDisplayName display = metadata_.get_type_display_name(type_def_index);
+    if (is_obfuscated_stub_type(display)) {
+        return;
+    }
+
+    const auto& type = metadata_.type_defs()[type_def_index];
     const std::string ns = display.namespace_name;
     std::string name = display.name;
     if (name.empty()) {
@@ -293,6 +302,13 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
     }
 
     IlReader il(il_bytes);
+
+    StructuredDecompileContext structured_context{metadata_, method_def_index, is_static, param_names};
+    if (const std::string structured = try_decompile_structured(il, structured_context);
+        !structured.empty()) {
+        return structured;
+    }
+
     std::vector<std::string> stack;
     std::vector<std::string> statements;
     std::unordered_map<int32_t, std::string> labels;
@@ -569,19 +585,23 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
         if ((op == "call" || op == "callvirt" || op == "newobj") &&
             std::holds_alternative<uint32_t>(insn.operand)) {
             const uint32_t token = std::get<uint32_t>(insn.operand);
-            std::string callee = metadata_.resolve_method_token(token);
+            const std::string callee = metadata_.resolve_method_token(token);
+            const MethodSignature callee_sig = metadata_.decode_method_token_signature(token);
+
+            int pop_count = static_cast<int>(callee_sig.param_count);
+            if (op == "newobj") {
+                pop_count = static_cast<int>(callee_sig.param_count);
+            } else if (op == "callvirt") {
+                if (callee_sig.has_this) {
+                    pop_count += 1;
+                }
+            } else if (callee_sig.has_this) {
+                pop_count += 1;
+            }
 
             std::vector<std::string> args;
-            if (op == "callvirt" || op == "call") {
-                const int pop_count = 8;
-                for (int i = 0; i < pop_count && !stack.empty(); ++i) {
-                    args.insert(args.begin(), pop());
-                }
-            } else if (op == "newobj") {
-                const int pop_count = 4;
-                for (int i = 0; i < pop_count && !stack.empty(); ++i) {
-                    args.push_back(pop());
-                }
+            for (int i = 0; i < pop_count && !stack.empty(); ++i) {
+                args.insert(args.begin(), pop());
             }
 
             std::ostringstream call;
@@ -787,6 +807,8 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
 
         emit("// unsupported: " + op);
     }
+
+    statements = restructure_goto_statements(std::move(statements));
 
     std::ostringstream body;
     for (const auto& line : statements) {

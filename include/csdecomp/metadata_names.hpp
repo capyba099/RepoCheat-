@@ -23,5 +23,6 @@ struct TypeDisplayName {
 [[nodiscard]] std::string format_member_display_name(const std::string& raw_name);
 [[nodiscard]] bool is_junk_field_name(const std::string& name);
 [[nodiscard]] int type_decompile_priority(const TypeDisplayName& display);
+[[nodiscard]] bool is_obfuscated_stub_type(const TypeDisplayName& display);
 
 }  // namespace csdecomp

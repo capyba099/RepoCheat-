@@ -271,4 +271,24 @@ int type_decompile_priority(const TypeDisplayName& display) {
     return 2;
 }
 
+bool is_obfuscated_stub_type(const TypeDisplayName& display) {
+    if (display.namespace_name.find("SharpMonoInjector") != std::string::npos) {
+        return false;
+    }
+    if (display.namespace_name.find("SampleApp") != std::string::npos) {
+        return false;
+    }
+    if (display.namespace_name.find("Injector") != std::string::npos &&
+        !is_obfuscated_namespace_token(display.name)) {
+        return false;
+    }
+    if (display.namespace_name == "Olesya" || display.namespace_name.rfind("Olesya.", 0) == 0) {
+        return is_obfuscated_namespace_token(display.name) || is_hex_token(display.name);
+    }
+    if (display.namespace_name.empty() && is_hex_token(display.name)) {
+        return true;
+    }
+    return type_decompile_priority(display) >= 3 && is_obfuscated_namespace_token(display.name);
+}
+
 }  // namespace csdecomp

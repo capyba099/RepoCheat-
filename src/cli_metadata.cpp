@@ -1175,6 +1175,43 @@ MethodSignature CliMetadata::decode_method_signature(uint32_t blob_index) const 
     return signature;
 }
 
+MethodSignature CliMetadata::decode_method_token_signature(uint32_t token) const {
+    const uint32_t table = (token >> 24) & 0xFF;
+    const uint32_t index = token & 0x00FFFFFF;
+    if (table == 0x0A) {
+        if (index > 0 && index <= member_refs_.size()) {
+            return decode_method_signature(member_refs_[index - 1].signature_index);
+        }
+    }
+    if (table == 0x06) {
+        if (index > 0 && index <= method_defs_.size()) {
+            return decode_method_signature(method_defs_[index - 1].signature_index);
+        }
+    }
+    if (table == 0x02) {
+        if (index > 0 && index <= type_defs_.size()) {
+            const uint32_t type_rid = index;
+            const uint32_t start = resolve_method_rid(type_defs_[type_rid - 1].method_list_index);
+            const uint32_t end = resolve_method_rid(
+                (type_rid < type_defs_.size()) ? type_defs_[type_rid].method_list_index
+                                               : static_cast<uint32_t>(method_defs_.size() + 1));
+            for (uint32_t rid = start; rid < end; ++rid) {
+                if (rid == 0 || rid > method_defs_.size()) {
+                    continue;
+                }
+                const auto& method = method_defs_[rid - 1];
+                const std::string name = get_string(method.name_index);
+                if (name == ".ctor" || name == ".cctor") {
+                    return decode_method_signature(method.signature_index);
+                }
+            }
+        }
+    }
+    MethodSignature fallback;
+    fallback.return_type = "object";
+    return fallback;
+}
+
 FieldSignature CliMetadata::decode_field_signature(uint32_t blob_index) const {
     FieldSignature signature;
     signature.type_name = "object";

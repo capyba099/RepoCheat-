@@ -140,6 +140,7 @@ public:
     [[nodiscard]] std::string resolve_method_token(uint32_t token) const;
     [[nodiscard]] std::string resolve_type_token(uint32_t token) const;
     [[nodiscard]] MethodSignature decode_method_signature(uint32_t blob_index) const;
+    [[nodiscard]] MethodSignature decode_method_token_signature(uint32_t token) const;
     [[nodiscard]] FieldSignature decode_field_signature(uint32_t blob_index) const;
     [[nodiscard]] std::vector<uint8_t> get_method_il(uint32_t method_rva, size_t method_index) const;
 

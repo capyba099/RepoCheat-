@@ -240,6 +240,9 @@ ProjectEmitResult emit_visual_studio_project(const PeReader& /*pe*/, const CliMe
     const auto root_types = root_type_indices(metadata);
     for (const size_t type_index : root_types) {
         const TypeDisplayName display = metadata.get_type_display_name(type_index);
+        if (is_obfuscated_stub_type(display)) {
+            continue;
+        }
         const std::string file_stem = unique_type_file_stem(display, type_index, used_file_stems);
         const fs::path type_dir = namespace_directory(project_dir, display.namespace_name);
         const fs::path source_path = type_dir / (file_stem + ".cs");
