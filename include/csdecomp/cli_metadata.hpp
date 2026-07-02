@@ -73,6 +73,10 @@ struct TypeRefRow {
     uint32_t type_namespace_index{0};
 };
 
+struct TypeSpecRow {
+    uint32_t signature_index{0};
+};
+
 struct NestedClassRow {
     uint32_t nested_class_index{0};
     uint32_t enclosing_class_index{0};
@@ -105,6 +109,7 @@ public:
     [[nodiscard]] const std::vector<ParamRow>& params() const { return params_; }
     [[nodiscard]] const std::vector<MemberRefRow>& member_refs() const { return member_refs_; }
     [[nodiscard]] const std::vector<TypeRefRow>& type_refs() const { return type_refs_; }
+    [[nodiscard]] const std::vector<TypeSpecRow>& type_specs() const { return type_specs_; }
     [[nodiscard]] const std::vector<NestedClassRow>& nested_classes() const { return nested_classes_; }
 
     [[nodiscard]] std::string resolve_type_name(uint32_t coded_index) const;
@@ -132,6 +137,7 @@ private:
 
     std::string decode_type_signature(const uint8_t* data, size_t size, size_t& offset) const;
     std::string decode_type_name_from_blob(const uint8_t* data, size_t size, size_t& offset) const;
+    std::string resolve_type_encoded(uint32_t encoded) const;
 
     const PeReader& pe_;
     std::vector<uint8_t> strings_heap_;
@@ -153,6 +159,7 @@ private:
     std::vector<ParamRow> params_;
     std::vector<MemberRefRow> member_refs_;
     std::vector<TypeRefRow> type_refs_;
+    std::vector<TypeSpecRow> type_specs_;
     std::vector<NestedClassRow> nested_classes_;
 };
 

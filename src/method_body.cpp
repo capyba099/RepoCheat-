@@ -66,7 +66,9 @@ MethodHeader parse_method_header(const uint8_t* data, size_t available, size_t m
     uint32_t code_size{};
     std::memcpy(&code_size, data + 4, 4);
     const uint32_t total = header_size + code_size;
-    if (total > max_total_size || total < header_size) {
+    constexpr uint32_t kMaxMethodBody = 64U * 1024U * 1024U;
+    if (code_size > kMaxMethodBody || total > kMaxMethodBody || total > max_total_size ||
+        total < header_size) {
         throw_invalid_header("method body size is out of bounds");
     }
 

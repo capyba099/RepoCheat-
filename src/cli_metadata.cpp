@@ -281,6 +281,12 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
                 type_refs_.push_back(entry);
                 break;
             }
+            case TableId::TypeSpec: {
+                TypeSpecRow entry{};
+                entry.signature_index = read_index(row_data, pos, blob_idx);
+                type_specs_.push_back(entry);
+                break;
+            }
             case TableId::NestedClass: {
                 NestedClassRow entry{};
                 entry.nested_class_index = read_index(row_data, pos, simple_index_size(row_counts_[2]));
@@ -306,12 +312,16 @@ std::vector<uint8_t> CliMetadata::get_blob(uint32_t index) const {
     if (index == 0 || index >= blob_heap_.size()) {
         return {};
     }
-    size_t offset = index;
-    uint32_t length = read_compressed_uint(blob_heap_.data(), blob_heap_.size(), offset);
-    if (offset + length > blob_heap_.size()) {
-        throw std::runtime_error("blob extends beyond heap");
+    try {
+        size_t offset = index;
+        const uint32_t length = read_compressed_uint(blob_heap_.data(), blob_heap_.size(), offset);
+        if (length == 0 || offset + length > blob_heap_.size()) {
+            return {};
+        }
+        return std::vector<uint8_t>(blob_heap_.begin() + offset, blob_heap_.begin() + offset + length);
+    } catch (const std::exception&) {
+        return {};
     }
-    return std::vector<uint8_t>(blob_heap_.begin() + offset, blob_heap_.begin() + offset + length);
 }
 
 std::string CliMetadata::get_user_string(uint32_t offset) const {
@@ -387,10 +397,8 @@ std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size,
             return "string";
         case 0x11:
         case 0x12: {
-            const uint32_t type_name_index = read_compressed_uint(data, size, offset);
-            const auto blob = get_blob(type_name_index);
-            size_t inner = 0;
-            return decode_type_name_from_blob(blob.data(), blob.size(), inner);
+            const uint32_t encoded = read_compressed_uint(data, size, offset);
+            return resolve_type_encoded(encoded);
         }
         case 0x13: {
             const uint32_t index = read_compressed_uint(data, size, offset);
@@ -412,6 +420,10 @@ std::string CliMetadata::decode_type_signature(const uint8_t* data, size_t size,
             }
             base_type += ">";
             return base_type;
+        }
+        case 0x1E: {
+            const uint32_t index = read_compressed_uint(data, size, offset);
+            return "TMethod" + std::to_string(index);
         }
         case 0x1C:
             return "object";
@@ -496,9 +508,9 @@ FieldSignature CliMetadata::decode_field_signature(uint32_t blob_index) const {
     return signature;
 }
 
-std::string CliMetadata::resolve_type_name(uint32_t coded_index) const {
-    const uint32_t tag = coded_index & 0x3;
-    const uint32_t index = decode_coded_index(coded_index, 2);
+std::string CliMetadata::resolve_type_encoded(uint32_t encoded) const {
+    const uint32_t tag = encoded & 0x3;
+    const uint32_t index = encoded >> 2;
     if (index == 0) {
         return "object";
     }
@@ -521,7 +533,22 @@ std::string CliMetadata::resolve_type_name(uint32_t coded_index) const {
         const std::string name = get_string(type.type_name_index);
         return ns.empty() ? name : ns + "." + name;
     }
-    return "TypeSpec?" + std::to_string(index);
+    if (tag == 2) {
+        if (index == 0 || index > type_specs_.size()) {
+            return "TypeSpec?" + std::to_string(index);
+        }
+        const auto blob = get_blob(type_specs_[index - 1].signature_index);
+        if (blob.empty()) {
+            return "TypeSpec?" + std::to_string(index);
+        }
+        size_t inner = 0;
+        return decode_type_signature(blob.data(), blob.size(), inner);
+    }
+    return "Type?" + std::to_string(encoded);
+}
+
+std::string CliMetadata::resolve_type_name(uint32_t coded_index) const {
+    return resolve_type_encoded(coded_index);
 }
 
 std::string CliMetadata::resolve_type_token(uint32_t token) const {
@@ -544,6 +571,12 @@ std::string CliMetadata::resolve_type_token(uint32_t token) const {
         const std::string ns = get_string(type.type_namespace_index);
         const std::string name = get_string(type.type_name_index);
         return ns.empty() ? name : ns + "." + name;
+    }
+    if (table == 0x1B) {
+        if (index == 0 || index > type_specs_.size()) {
+            return "TypeSpec?" + std::to_string(index);
+        }
+        return resolve_type_encoded(static_cast<uint32_t>((index << 2) | 2));
     }
     return "type_token_0x" + std::to_string(token);
 }
@@ -602,8 +635,6 @@ std::string CliMetadata::resolve_member_ref(uint32_t index) const {
     }
     return declaring.empty() ? name : declaring + "." + name;
 }
-
-#include "csdecomp/method_body.hpp"
 
 std::vector<uint8_t> CliMetadata::get_method_il(uint32_t method_rva) const {
     if (method_rva == 0) {

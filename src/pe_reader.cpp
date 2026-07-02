@@ -104,9 +104,13 @@ uint32_t PeReader::rva_to_offset(uint32_t rva) const {
 
 size_t PeReader::max_read_size_at_rva(uint32_t rva) const {
     for (const auto& section : sections_) {
-        const uint32_t section_end = section.virtual_address + std::max(section.virtual_size, section.raw_data_size);
-        if (rva >= section.virtual_address && rva < section_end) {
-            return section_end - rva;
+        const uint32_t virt_end = section.virtual_address + section.virtual_size;
+        const uint32_t file_end = section.virtual_address + section.raw_data_size;
+        if (rva >= section.virtual_address && rva < virt_end) {
+            if (rva >= file_end) {
+                return 0;
+            }
+            return file_end - rva;
         }
     }
     throw std::runtime_error("RVA not mapped to any section: 0x" + std::to_string(rva));
