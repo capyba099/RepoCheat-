@@ -151,6 +151,12 @@ private:
     size_t score_metadata_layout() const;
 
     void read_table_rows(TableId id, size_t row_count);
+    void read_typedef_rows_standard(size_t row_count, uint32_t row_size, size_t base);
+    void read_methoddef_rows_standard(size_t row_count, uint32_t row_size, size_t base);
+    void read_typedef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base);
+    void read_methoddef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base);
+    [[nodiscard]] int score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) const;
+    [[nodiscard]] int score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] bool has_table(TableId id) const;
     [[nodiscard]] uint32_t resolve_field_rid(uint32_t list_index) const;
     [[nodiscard]] uint32_t resolve_method_rid(uint32_t list_index) const;
@@ -182,6 +188,7 @@ private:
     uint64_t tables_valid_{0};
     size_t tables_start_{0};
     uint8_t tables_heap_sizes_declared_{0};
+    bool obfuscated_metadata_{false};
     uint32_t string_index_size_{2};
     uint32_t blob_index_size_{2};
     uint32_t guid_index_size_{2};

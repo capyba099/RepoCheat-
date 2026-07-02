@@ -73,14 +73,261 @@ uint32_t read_compressed_uint(const uint8_t* data, size_t size, size_t& offset) 
     return value;
 }
 
+constexpr uint32_t kMaxRowDrift = 15U;
+
+uint32_t read_row_index(const uint8_t* row, size_t offset, uint32_t size) {
+    uint32_t value = 0;
+    if (size == 2) {
+        std::memcpy(&value, row + offset, 2);
+    } else {
+        std::memcpy(&value, row + offset, 4);
+    }
+    return value;
+}
+
 }  // namespace
+
+int CliMetadata::score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) const {
+    if (row == nullptr || row_size < 12) {
+        return -1;
+    }
+    uint32_t flags = 0;
+    std::memcpy(&flags, row, 4);
+    if (flags > 0x00FFFFFFU) {
+        return -1;
+    }
+
+    const uint32_t name_index = read_row_index(row, 4, string_index_size_);
+    const uint32_t ns_index = read_row_index(row, 4 + string_index_size_, string_index_size_);
+    const std::string name = get_string(name_index);
+    const std::string ns = get_string(ns_index);
+
+    int score = 0;
+    if (name.rfind("Olesya.", 0) == 0 && name.size() >= 10) {
+        score += 10;
+    } else if (name == "Forms" || name == "Linq" || name == "Text") {
+        score += 8;
+    } else if (!name.empty() && is_plausible_metadata_name(name)) {
+        score += 3;
+    }
+    if (ns.rfind("Olesya.", 0) == 0 && ns.size() >= 10) {
+        score += 5;
+    } else if (!ns.empty() && is_plausible_metadata_name(ns)) {
+        score += 2;
+    }
+    return score;
+}
+
+int CliMetadata::score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size) const {
+    if (row == nullptr || row_size < 10) {
+        return -1;
+    }
+
+    uint32_t rva = 0;
+    std::memcpy(&rva, row, 4);
+    const uint32_t name_index = read_row_index(row, 8, string_index_size_);
+    const std::string name = get_string(name_index);
+
+    int score = 0;
+    if (name.rfind("Olesya.", 0) == 0) {
+        score += 8;
+    }
+    if (name == "Forms" || name == "Linq" || name == "Text") {
+        score += 10;
+    }
+    if (name == ".ctor" || name == ".cctor") {
+        score += 6;
+    }
+    if (!name.empty() && is_plausible_metadata_name(name)) {
+        score += 2;
+    }
+
+    if (rva != 0) {
+        try {
+            const size_t max_size = pe_.max_read_size_at_rva(rva);
+            if (max_size > 0) {
+                const size_t peek_size = std::min(max_size, static_cast<size_t>(12));
+                const auto header_bytes = pe_.read_at_rva(rva, peek_size);
+                parse_method_header(header_bytes, max_size);
+                score += 25;
+            }
+        } catch (const std::exception&) {
+        }
+    } else if (!name.empty()) {
+        score += 1;
+    }
+    return score;
+}
+
+void CliMetadata::read_typedef_rows_standard(size_t row_count, uint32_t row_size, size_t base) {
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    type_defs_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        const size_t row_offset = base + row * row_size;
+        if (!safe_row_range(row_offset, row_size, valid_tables_.size())) {
+            throw std::runtime_error("metadata row read out of bounds in TypeDef table");
+        }
+        const uint8_t* row_data = valid_tables_.data() + row_offset;
+        size_t pos = 0;
+        TypeDefRow entry{};
+        entry.flags = read_index(row_data, pos, 4);
+        entry.type_name_index = read_index(row_data, pos, string_index_size_);
+        entry.type_namespace_index = read_index(row_data, pos, string_index_size_);
+        entry.extends_index =
+            read_index(row_data, pos, coded_index_size(max_row_count({2, 1, 27}), 2));
+        entry.field_list_index = read_index(row_data, pos, simple_index_size(row_counts_[4]));
+        entry.method_list_index = read_index(row_data, pos, simple_index_size(row_counts_[6]));
+        type_defs_.push_back(entry);
+    }
+}
+
+void CliMetadata::read_methoddef_rows_standard(size_t row_count, uint32_t row_size, size_t base) {
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    method_defs_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        const size_t row_offset = base + row * row_size;
+        if (!safe_row_range(row_offset, row_size, valid_tables_.size())) {
+            throw std::runtime_error("metadata row read out of bounds in MethodDef table");
+        }
+        const uint8_t* row_data = valid_tables_.data() + row_offset;
+        size_t pos = 0;
+        MethodDefRow entry{};
+        entry.rva = read_index(row_data, pos, 4);
+        entry.impl_flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
+        entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
+        entry.name_index = read_index(row_data, pos, string_index_size_);
+        entry.signature_index = read_index(row_data, pos, blob_index_size_);
+        entry.param_list_index = read_index(row_data, pos, simple_index_size(row_counts_[8]));
+        method_defs_.push_back(entry);
+    }
+}
+
+void CliMetadata::read_typedef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base) {
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    size_t pos = base;
+    type_defs_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        size_t best_delta = 0;
+        int best_score = -1;
+        for (size_t delta = 0; delta <= kMaxRowDrift; ++delta) {
+            const size_t candidate = pos + delta;
+            if (!safe_row_range(candidate, row_size, valid_tables_.size())) {
+                break;
+            }
+            const int row_score =
+                score_typedef_row_bytes(valid_tables_.data() + candidate, row_size);
+            if (row_score > best_score) {
+                best_score = row_score;
+                best_delta = delta;
+            }
+        }
+
+        pos += best_delta;
+        if (!safe_row_range(pos, row_size, valid_tables_.size())) {
+            break;
+        }
+
+        const uint8_t* row_data = valid_tables_.data() + pos;
+        size_t row_pos = 0;
+        TypeDefRow entry{};
+        entry.flags = read_index(row_data, row_pos, 4);
+        entry.type_name_index = read_index(row_data, row_pos, string_index_size_);
+        entry.type_namespace_index = read_index(row_data, row_pos, string_index_size_);
+        entry.extends_index =
+            read_index(row_data, row_pos, coded_index_size(max_row_count({2, 1, 27}), 2));
+        entry.field_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[4]));
+        entry.method_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[6]));
+        type_defs_.push_back(entry);
+        pos += row_size;
+    }
+}
+
+void CliMetadata::read_methoddef_rows_with_drift(size_t row_count, uint32_t row_size, size_t base) {
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    size_t pos = base;
+    method_defs_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        size_t best_delta = 0;
+        int best_score = -1;
+        for (size_t delta = 0; delta <= kMaxRowDrift; ++delta) {
+            const size_t candidate = pos + delta;
+            if (!safe_row_range(candidate, row_size, valid_tables_.size())) {
+                break;
+            }
+            const int row_score =
+                score_methoddef_row_bytes(valid_tables_.data() + candidate, row_size);
+            if (row_score > best_score) {
+                best_score = row_score;
+                best_delta = delta;
+            }
+        }
+
+        pos += best_delta;
+        if (!safe_row_range(pos, row_size, valid_tables_.size())) {
+            break;
+        }
+
+        const uint8_t* row_data = valid_tables_.data() + pos;
+        size_t row_pos = 0;
+        MethodDefRow entry{};
+        entry.rva = read_index(row_data, row_pos, 4);
+        entry.impl_flags = static_cast<uint16_t>(read_index(row_data, row_pos, 2));
+        entry.flags = static_cast<uint16_t>(read_index(row_data, row_pos, 2));
+        entry.name_index = read_index(row_data, row_pos, string_index_size_);
+        entry.signature_index = read_index(row_data, row_pos, blob_index_size_);
+        entry.param_list_index = read_index(row_data, row_pos, simple_index_size(row_counts_[8]));
+        method_defs_.push_back(entry);
+        pos += row_size;
+    }
+}
 
 CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
     parse_metadata_root();
     read_tables_header();
 
-    uint8_t best_heap = tables_heap_sizes_declared_;
+    uint8_t best_heap = static_cast<uint8_t>(tables_heap_sizes_declared_ & 0x07);
     size_t best_score = 0;
+    const bool declared_heap_trusted = (tables_heap_sizes_declared_ & 0xF8U) == 0;
     for (int mask = 0; mask < 8; ++mask) {
         const uint8_t heap_sizes = static_cast<uint8_t>(mask & 0x07);
         clear_parsed_tables();
@@ -88,7 +335,7 @@ CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
             continue;
         }
         size_t score = score_metadata_layout();
-        if (heap_sizes == tables_heap_sizes_declared_) {
+        if (declared_heap_trusted && heap_sizes == (tables_heap_sizes_declared_ & 0x07)) {
             score += 50;
         }
         if (score > best_score) {
@@ -108,6 +355,7 @@ void CliMetadata::read_tables_header() {
     reader.skip(4);
     reader.skip(2);
     tables_heap_sizes_declared_ = reader.read_u8();
+    obfuscated_metadata_ = (tables_heap_sizes_declared_ & 0xF8U) != 0;
     reader.skip(1);
     tables_valid_ = reader.read_u64();
     reader.skip(8);
@@ -153,9 +401,15 @@ size_t CliMetadata::score_metadata_layout() const {
         const std::string ns = get_string(type.type_namespace_index);
         if (is_plausible_metadata_name(name)) {
             score += 8;
+            if (name.rfind("Olesya.", 0) == 0 && name.size() >= 10) {
+                score += 12;
+            }
         }
         if (is_plausible_metadata_name(ns)) {
             score += 4;
+            if (ns.rfind("Olesya.", 0) == 0 && ns.size() >= 10) {
+                score += 8;
+            }
         }
         const std::string base = resolve_type_name(type.extends_index);
         if (!base.empty() && base.find('?') == std::string::npos) {
@@ -388,12 +642,20 @@ void CliMetadata::parse_metadata_root() {
     }
 
     auto load_stream = [&](const std::string& expected, std::vector<uint8_t>& target) {
+        uint32_t best_size = 0;
+        uint32_t best_offset = 0;
         for (const auto& stream : streams) {
-            if (stream.name == expected) {
-                target.assign(metadata_bytes.begin() + stream.offset,
-                              metadata_bytes.begin() + stream.offset + stream.size);
-                return;
+            if (stream.name != expected) {
+                continue;
             }
+            if (stream.size > best_size) {
+                best_size = stream.size;
+                best_offset = stream.offset;
+            }
+        }
+        if (best_size > 0) {
+            target.assign(metadata_bytes.begin() + best_offset,
+                          metadata_bytes.begin() + best_offset + best_size);
         }
     };
 
@@ -439,6 +701,23 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
     const uint32_t row_size = table_row_sizes_[table_index];
     const size_t base = table_offsets_[table_index];
 
+    if (id == TableId::TypeDef) {
+        if (obfuscated_metadata_) {
+            read_typedef_rows_with_drift(row_count, row_size, base);
+        } else {
+            read_typedef_rows_standard(row_count, row_size, base);
+        }
+        return;
+    }
+    if (id == TableId::MethodDef) {
+        if (obfuscated_metadata_) {
+            read_methoddef_rows_with_drift(row_count, row_size, base);
+        } else {
+            read_methoddef_rows_standard(row_count, row_size, base);
+        }
+        return;
+    }
+
     const auto str_idx = string_index_size_;
     const auto blob_idx = blob_index_size_;
 
@@ -481,18 +760,8 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
                 param_ptrs_.push_back(param_index);
                 break;
             }
-            case TableId::TypeDef: {
-                TypeDefRow entry{};
-                entry.flags = read_index(row_data, pos, 4);
-                entry.type_name_index = read_index(row_data, pos, str_idx);
-                entry.type_namespace_index = read_index(row_data, pos, str_idx);
-                entry.extends_index = read_index(
-                    row_data, pos, coded_index_size(max_row_count({2, 1, 27}), 2));
-                entry.field_list_index = read_index(row_data, pos, simple_index_size(row_counts_[4]));
-                entry.method_list_index = read_index(row_data, pos, simple_index_size(row_counts_[6]));
-                type_defs_.push_back(entry);
+            case TableId::TypeDef:
                 break;
-            }
             case TableId::Field: {
                 FieldRow entry{};
                 entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
@@ -501,17 +770,8 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
                 fields_.push_back(entry);
                 break;
             }
-            case TableId::MethodDef: {
-                MethodDefRow entry{};
-                entry.rva = read_index(row_data, pos, 4);
-                entry.impl_flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
-                entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
-                entry.name_index = read_index(row_data, pos, str_idx);
-                entry.signature_index = read_index(row_data, pos, blob_idx);
-                entry.param_list_index = read_index(row_data, pos, simple_index_size(row_counts_[8]));
-                method_defs_.push_back(entry);
+            case TableId::MethodDef:
                 break;
-            }
             case TableId::Param: {
                 ParamRow entry{};
                 entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
