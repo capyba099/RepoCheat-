@@ -21,5 +21,7 @@ struct TypeDisplayName {
                                                       bool obfuscated_metadata);
 [[nodiscard]] std::string format_method_display_name(const std::string& raw_name, size_t method_index);
 [[nodiscard]] std::string format_member_display_name(const std::string& raw_name);
+[[nodiscard]] bool is_junk_field_name(const std::string& name);
+[[nodiscard]] int type_decompile_priority(const TypeDisplayName& display);
 
 }  // namespace csdecomp

@@ -163,11 +163,14 @@ private:
     void read_methoddef_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
     void read_memberref_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
     void read_memberref_rows_standard(size_t row_count, uint32_t row_size, size_t base);
+    void read_field_rows_with_skew(size_t row_count, uint32_t row_size, size_t base);
+    void read_field_rows_standard(size_t row_count, uint32_t row_size, size_t base);
     [[nodiscard]] size_t find_table_skew(size_t base, size_t row_count, uint32_t row_size,
                                          const std::function<int(const uint8_t*, uint32_t)>& score_row) const;
     [[nodiscard]] int score_typedef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] int score_methoddef_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] int score_memberref_row_bytes(const uint8_t* row, uint32_t row_size) const;
+    [[nodiscard]] int score_field_row_bytes(const uint8_t* row, uint32_t row_size) const;
     [[nodiscard]] bool has_table(TableId id) const;
     [[nodiscard]] uint32_t resolve_field_rid(uint32_t list_index) const;
     [[nodiscard]] uint32_t resolve_method_rid(uint32_t list_index) const;

@@ -2,6 +2,7 @@
 
 #include "csdecomp/metadata_names.hpp"
 
+#include <algorithm>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -79,6 +80,8 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
     out << "// https://github.com/RepoCheat\n\n";
     out << "using System;\n\n";
 
+    std::vector<size_t> root_types;
+    root_types.reserve(metadata_.type_defs().size());
     for (size_t i = 0; i < metadata_.type_defs().size(); ++i) {
         bool is_nested = false;
         for (const auto& nested : metadata_.nested_classes()) {
@@ -88,13 +91,29 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
             }
         }
         if (!is_nested) {
-            try {
-                decompile_type(out, i, options);
-                out << "\n";
-                out.flush();
-            } catch (const std::exception& ex) {
-                out << "// Failed to decompile type #" << i << ": " << ex.what() << "\n\n";
-            }
+            root_types.push_back(i);
+        }
+    }
+
+    std::sort(root_types.begin(), root_types.end(),
+              [this](size_t left, size_t right) {
+                  const int left_priority =
+                      type_decompile_priority(metadata_.get_type_display_name(left));
+                  const int right_priority =
+                      type_decompile_priority(metadata_.get_type_display_name(right));
+                  if (left_priority != right_priority) {
+                      return left_priority < right_priority;
+                  }
+                  return left < right;
+              });
+
+    for (const size_t type_index : root_types) {
+        try {
+            decompile_type(out, type_index, options);
+            out << "\n";
+            out.flush();
+        } catch (const std::exception& ex) {
+            out << "// Failed to decompile type #" << type_index << ": " << ex.what() << "\n\n";
         }
     }
 }
@@ -142,6 +161,9 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
             const auto sig = metadata_.decode_field_signature(field.signature_index);
             const std::string field_name =
                 format_member_display_name(metadata_.get_string(field.name_index));
+            if (is_junk_field_name(field_name)) {
+                continue;
+            }
             out << indent(indent_level + 1) << format_field_flags(field.flags) << sig.type_name << " "
                 << format_type_identifier(field_name.empty() ? "field_" + std::to_string(field_index + 1)
                                                              : field_name)
@@ -158,6 +180,10 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
         const auto& property = metadata_.properties()[property_index];
         const std::string property_name =
             format_member_display_name(metadata_.get_string(property.name_index));
+        if (is_junk_field_name(property_name) && property_name.find("BackingField") == std::string::npos &&
+            property_name.find('>') == std::string::npos) {
+            continue;
+        }
         out << indent(indent_level + 1) << "/* property */ "
             << format_type_identifier(property_name.empty() ? "Property_" + std::to_string(property_index + 1)
                                                             : property_name)
@@ -763,6 +789,9 @@ std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*
     std::ostringstream body;
     for (const auto& line : statements) {
         body << line << "\n";
+    }
+    if (statements.empty()) {
+        body << indent(2) << "// IL not decompiled (encrypted, unsupported, or auto-property stub)\n";
     }
     return body.str();
 }

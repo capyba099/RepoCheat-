@@ -1,5 +1,6 @@
 #include "csdecomp/metadata_names.hpp"
 
+#include <algorithm>
 #include <cctype>
 
 namespace csdecomp {
@@ -45,6 +46,14 @@ bool is_obfuscated_namespace_token(const std::string& value) {
     if (starts_with_ci(value, "Olesya.")) {
         const std::string tail = value.substr(7);
         return is_hex_token(tail);
+    }
+    if (value.find('.') != std::string::npos) {
+        const std::string leaf = value.substr(value.rfind('.') + 1);
+        if (is_hex_token(leaf) && leaf.size() >= 6) {
+            return true;
+        }
+    } else if (is_hex_token(value) && value.size() >= 6) {
+        return true;
     }
     return false;
 }
@@ -215,6 +224,51 @@ std::string format_member_display_name(const std::string& raw_name) {
         return raw_name.substr(1);
     }
     return raw_name;
+}
+
+bool is_junk_field_name(const std::string& name) {
+    if (name.empty()) {
+        return true;
+    }
+    if (name == "00" || name == "180" || name == "unknown") {
+        return true;
+    }
+    if (name == "IO" || name == "Linq" || name == "Xml" || name == "Tasks" || name == "Reflection" ||
+        name == "Security" || name == "Drawing" || name == "Http" || name == "Generic") {
+        return true;
+    }
+    if (is_obfuscated_namespace_token(name)) {
+        return true;
+    }
+    if (name.rfind("Olesya.", 0) == 0 || name.rfind("sya.", 0) == 0 || name.rfind("lesya.", 0) == 0) {
+        return true;
+    }
+    if (is_hex_token(name) && name.size() >= 6) {
+        return true;
+    }
+    if (name.size() <= 2 && std::all_of(name.begin(), name.end(), [](char ch) {
+            return std::isxdigit(static_cast<unsigned char>(ch));
+        })) {
+        return true;
+    }
+    return false;
+}
+
+int type_decompile_priority(const TypeDisplayName& display) {
+    if (display.namespace_name.find("SharpMonoInjector") != std::string::npos) {
+        return 0;
+    }
+    if (display.namespace_name.find("Injector") != std::string::npos) {
+        return 1;
+    }
+    if (display.namespace_name.rfind("Olesya", 0) == 0 ||
+        (display.namespace_name.empty() && is_hex_token(display.name))) {
+        return 3;
+    }
+    if (display.namespace_name == "Olesya") {
+        return 3;
+    }
+    return 2;
 }
 
 }  // namespace csdecomp

@@ -370,6 +370,71 @@ void CliMetadata::read_memberref_rows_with_skew(size_t row_count, uint32_t row_s
     read_memberref_rows_standard(row_count, row_size, base + skew);
 }
 
+int CliMetadata::score_field_row_bytes(const uint8_t* row, uint32_t row_size) const {
+    if (row == nullptr || row_size < 4) {
+        return -1;
+    }
+    uint16_t flags = 0;
+    std::memcpy(&flags, row, 2);
+    if (flags > 0x07FFU) {
+        return -1;
+    }
+    const uint32_t name_index = read_row_index(row, 2, string_index_size_);
+    const std::string name = get_string(name_index);
+    if (name.empty()) {
+        return 0;
+    }
+    if (is_junk_field_name(name)) {
+        return 1;
+    }
+    int score = 3;
+    if (name.find("BackingField") != std::string::npos) {
+        score += 40;
+    }
+    if (name[0] == '_' || name[0] == '<') {
+        score += 20;
+    }
+    if (name.rfind("get_", 0) == 0 || name.rfind("set_", 0) == 0) {
+        score += 10;
+    }
+    return score;
+}
+
+void CliMetadata::read_field_rows_standard(size_t row_count, uint32_t row_size, size_t base) {
+    const auto read_index = [&](const uint8_t* row, size_t& pos, uint32_t size) -> uint32_t {
+        uint32_t value = 0;
+        if (size == 2) {
+            std::memcpy(&value, row + pos, 2);
+        } else {
+            std::memcpy(&value, row + pos, 4);
+        }
+        pos += size;
+        return value;
+    };
+
+    fields_.reserve(row_count);
+    for (size_t row = 0; row < row_count; ++row) {
+        const size_t row_offset = base + row * row_size;
+        if (!safe_row_range(row_offset, row_size, valid_tables_.size())) {
+            throw std::runtime_error("metadata row read out of bounds in Field table");
+        }
+        const uint8_t* row_data = valid_tables_.data() + row_offset;
+        size_t pos = 0;
+        FieldRow entry{};
+        entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
+        entry.name_index = read_index(row_data, pos, string_index_size_);
+        entry.signature_index = read_index(row_data, pos, blob_index_size_);
+        fields_.push_back(entry);
+    }
+}
+
+void CliMetadata::read_field_rows_with_skew(size_t row_count, uint32_t row_size, size_t base) {
+    const size_t skew = find_table_skew(
+        base, row_count, row_size,
+        [this](const uint8_t* row, uint32_t size) { return score_field_row_bytes(row, size); });
+    read_field_rows_standard(row_count, row_size, base + skew);
+}
+
 CliMetadata::CliMetadata(const PeReader& pe) : pe_(pe) {
     parse_metadata_root();
     read_tables_header();
@@ -774,6 +839,14 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
         }
         return;
     }
+    if (id == TableId::Field) {
+        if (obfuscated_metadata_) {
+            read_field_rows_with_skew(row_count, row_size, base);
+        } else {
+            read_field_rows_standard(row_count, row_size, base);
+        }
+        return;
+    }
 
     const auto str_idx = string_index_size_;
     const auto blob_idx = blob_index_size_;
@@ -819,14 +892,8 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
             }
             case TableId::TypeDef:
                 break;
-            case TableId::Field: {
-                FieldRow entry{};
-                entry.flags = static_cast<uint16_t>(read_index(row_data, pos, 2));
-                entry.name_index = read_index(row_data, pos, str_idx);
-                entry.signature_index = read_index(row_data, pos, blob_idx);
-                fields_.push_back(entry);
+            case TableId::Field:
                 break;
-            }
             case TableId::MethodDef:
                 break;
             case TableId::Param: {
