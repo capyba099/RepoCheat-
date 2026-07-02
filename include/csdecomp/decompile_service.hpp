@@ -12,7 +12,12 @@ struct DecompileRequest {
     DecompileOptions options{};
 };
 
+struct DecompileFileResult {
+    bool ok{false};
+    std::string error_message;
+};
+
 std::string decompile_to_string(const DecompileRequest& request);
-void decompile_to_file(const DecompileRequest& request);
+DecompileFileResult decompile_to_file(const DecompileRequest& request);
 
 }  // namespace csdecomp

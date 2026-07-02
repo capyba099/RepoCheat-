@@ -63,40 +63,12 @@ void on_decompile_done(std::wstring* message);
 void on_decompile_error(std::wstring* message);
 void post_decompile_error(const std::wstring& text);
 LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info);
-PVOID g_vectored_handler = nullptr;
 
-constexpr DWORD kGccCppException = 0x20474343;   // MinGW/GCC C++ exception (" GCC")
-constexpr DWORD kMsvcCppException = 0xE06D7363;  // MSVC C++ exception
+constexpr DWORD kMsvcCppException = 0xE06D7363;
 
 bool is_cpp_exception_code(DWORD code) {
-    return code == kGccCppException || code == kMsvcCppException;
-}
-
-bool is_debug_exception_code(DWORD code) {
-    return code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP;
-}
-
-LONG CALLBACK gui_vectored_exception_handler(EXCEPTION_POINTERS* info) {
-    if (!g_decompile_worker_active || info == nullptr || info->ExceptionRecord == nullptr) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    const DWORD code = info->ExceptionRecord->ExceptionCode;
-    // Let C++ try/catch handle thrown exceptions (MinGW uses SEH under the hood).
-    if (is_cpp_exception_code(code) || is_debug_exception_code(code)) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    wchar_t buffer[512]{};
-    std::swprintf(buffer, 512,
-                  L"Critical error while decompiling.\n\n"
-                  L"Exception code: 0x%08lX\n\n"
-                  L"The assembly may be corrupted, obfuscated, or too complex.",
-                  static_cast<unsigned long>(code));
-    post_decompile_error(buffer);
-    g_decompile_worker_active = false;
-    ExitThread(1);
-    return EXCEPTION_CONTINUE_SEARCH;
+    // MinGW/GCC uses SEH for C++ exceptions; low 24 bits spell "GCC".
+    return code == kMsvcCppException || (code & 0x00FFFFFFU) == 0x00474343U;
 }
 
 void post_decompile_error(const std::wstring& text) {
@@ -119,10 +91,17 @@ LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
     }
 
     wchar_t buffer[512]{};
-    std::swprintf(buffer, 512,
-                  L"csdecomp crashed.\n\nException code: 0x%08lX\n\n"
-                  L"The assembly may be corrupted, obfuscated, or too large.",
-                  code);
+    if (g_decompile_worker_active) {
+        std::swprintf(buffer, 512,
+                      L"Critical error while decompiling.\n\n"
+                      L"Exception code: 0x%08lX\n\n"
+                      L"The assembly may be corrupted, obfuscated, or too complex.",
+                      code);
+    } else {
+        std::swprintf(buffer, 512,
+                      L"csdecomp crashed.\n\nException code: 0x%08lX",
+                      code);
+    }
     MessageBoxW(g_window, buffer, L"csdecomp", MB_ICONERROR | MB_OK);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -137,19 +116,15 @@ LONG WINAPI gui_unhandled_exception_filter(EXCEPTION_POINTERS* info) {
 
 void run_decompile_job(DecompileWorkerPayload* payload) {
     g_decompile_worker_active = true;
-    try {
-        decompile_to_file(payload->request);
+
+    const DecompileFileResult result = decompile_to_file(payload->request);
+    if (result.ok) {
         auto* message = new std::wstring(L"Saved to:\n" + payload->output_path);
         PostMessageW(g_window, WM_DECOMPILE_DONE, 0, reinterpret_cast<LPARAM>(message));
-    } catch (const std::bad_alloc&) {
-        post_decompile_error(
-            L"Out of memory while decompiling.\n\n"
-            L"Try a smaller assembly or close other programs.");
-    } catch (const std::exception& ex) {
-        post_decompile_error(utf8_to_wide(ex.what()));
-    } catch (...) {
-        post_decompile_error(L"Unknown error during decompilation.");
+    } else {
+        post_decompile_error(utf8_to_wide(result.error_message));
     }
+
     g_decompile_worker_active = false;
 }
 
@@ -451,10 +426,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             on_decompile_error(reinterpret_cast<std::wstring*>(lparam));
             return 0;
         case WM_DESTROY:
-            if (g_vectored_handler != nullptr) {
-                RemoveVectoredExceptionHandler(g_vectored_handler);
-                g_vectored_handler = nullptr;
-            }
             if (g_worker_thread != nullptr) {
                 WaitForSingleObject(g_worker_thread, INFINITE);
                 CloseHandle(g_worker_thread);
@@ -480,7 +451,6 @@ int run_win32_gui() {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     std::set_terminate(gui_terminate_handler);
     SetUnhandledExceptionFilter(gui_unhandled_exception_filter);
-    g_vectored_handler = AddVectoredExceptionHandler(1, gui_vectored_exception_handler);
 
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(controls);

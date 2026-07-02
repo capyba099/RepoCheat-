@@ -64,7 +64,11 @@ int run_cli(int argc, char** argv) {
     if (request.output_path.empty()) {
         std::cout << csdecomp::decompile_to_string(request);
     } else {
-        csdecomp::decompile_to_file(request);
+        const auto result = csdecomp::decompile_to_file(request);
+        if (!result.ok) {
+            std::cerr << "Error: " << result.error_message << "\n";
+            return 2;
+        }
         std::cerr << "Decompiled C# written to " << request.output_path << "\n";
     }
     return 0;

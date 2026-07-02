@@ -43,9 +43,12 @@ std::string decompile_to_string(const DecompileRequest& request) {
     return buffer.str();
 }
 
-void decompile_to_file(const DecompileRequest& request) {
+DecompileFileResult decompile_to_file(const DecompileRequest& request) {
+    DecompileFileResult result;
+
     if (request.input_path.empty()) {
-        throw std::runtime_error("input file is not selected");
+        result.error_message = "input file is not selected";
+        return result;
     }
 
     const std::string output_path = request.output_path.empty()
@@ -54,10 +57,9 @@ void decompile_to_file(const DecompileRequest& request) {
 
     std::ofstream out(output_path, std::ios::binary);
     if (!out) {
-        throw std::runtime_error("failed to open output file: " + output_path);
+        result.error_message = "failed to open output file: " + output_path;
+        return result;
     }
-
-    out.flush();
 
     try {
         const auto bytes = read_file_bytes(request.input_path);
@@ -65,15 +67,19 @@ void decompile_to_file(const DecompileRequest& request) {
         CliMetadata metadata(pe);
         decompile_loaded(pe, metadata, out, request.options);
         out.flush();
+        result.ok = true;
+        return result;
+    } catch (const std::bad_alloc&) {
+        result.error_message = "out of memory while decompiling";
     } catch (const std::exception& ex) {
-        out << "\n// csdecomp: failed: " << ex.what() << "\n";
-        out.flush();
-        throw std::runtime_error(ex.what());
+        result.error_message = ex.what();
     } catch (...) {
-        out << "\n// csdecomp: failed with unknown error\n";
-        out.flush();
-        throw std::runtime_error("unknown decompilation error");
+        result.error_message = "unknown decompilation error";
     }
+
+    out << "\n// csdecomp: failed: " << result.error_message << "\n";
+    out.flush();
+    return result;
 }
 
 }  // namespace csdecomp
