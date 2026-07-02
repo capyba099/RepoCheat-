@@ -62,9 +62,21 @@ DecompileFileResult decompile_to_file(const DecompileRequest& request) {
     }
 
     try {
+        out << "// csdecomp: loading assembly\n";
+        out.flush();
+
         const auto bytes = read_file_bytes(request.input_path);
+        out << "// csdecomp: parsing PE (" << bytes.size() << " bytes)\n";
+        out.flush();
+
         PeReader pe(bytes);
+        out << "// csdecomp: parsing metadata\n";
+        out.flush();
+
         CliMetadata metadata(pe);
+        out << "// csdecomp: decompiling types\n";
+        out.flush();
+
         decompile_loaded(pe, metadata, out, request.options);
         out.flush();
         result.ok = true;

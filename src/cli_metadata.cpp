@@ -15,6 +15,29 @@ namespace csdecomp {
 namespace {
 
 constexpr int kMaxTypeSignatureDepth = 48;
+constexpr uint32_t kMaxMetadataTableRows = 0x001FFFFFU;
+constexpr uint32_t kMaxRidListSpan = 8192U;
+
+bool safe_row_range(size_t row_offset, uint32_t row_size, size_t table_size) {
+    if (row_size == 0 || row_offset > table_size) {
+        return false;
+    }
+    return row_size <= table_size - row_offset;
+}
+
+void append_rid_list(uint32_t start, uint32_t end, uint32_t max_rid, std::vector<size_t>& out) {
+    if (start == 0 || end < start) {
+        return;
+    }
+    const uint32_t span = end - start;
+    if (span > kMaxRidListSpan || end > max_rid + 1U) {
+        return;
+    }
+    out.reserve(out.size() + span);
+    for (uint32_t rid = start; rid < end; ++rid) {
+        out.push_back(static_cast<size_t>(rid - 1U));
+    }
+}
 
 uint32_t read_compressed_uint(const uint8_t* data, size_t size, size_t& offset) {
     if (offset >= size) {
@@ -199,19 +222,28 @@ void CliMetadata::parse_tables() {
     set_row_size(54, simple(6) + simple(49));  // StateMachineMethod
     set_row_size(55, coded({6, 48, 51, 52, 53, 54}, 3) + blob_idx);  // CustomDebugInformation
 
+    const size_t available_table_bytes = tables_data_.size() - tables_start;
     size_t offset = 0;
     for (int i = 0; i < 64; ++i) {
         if (((valid >> i) & 1ULL) != 0) {
+            if (row_counts_[i] > kMaxMetadataTableRows) {
+                throw std::runtime_error("metadata table 0x" + std::to_string(i) + " has too many rows");
+            }
             if (row_counts_[i] > 0 && table_row_sizes_[i] == 0) {
                 throw std::runtime_error("unsupported metadata table 0x" +
                                          std::to_string(i) + " is present");
             }
             table_offsets_[i] = static_cast<uint32_t>(offset);
-            offset += static_cast<size_t>(table_row_sizes_[i]) * row_counts_[i];
+            const size_t table_bytes =
+                static_cast<size_t>(table_row_sizes_[i]) * static_cast<size_t>(row_counts_[i]);
+            if (table_bytes > available_table_bytes - offset) {
+                throw std::runtime_error("metadata table 0x" + std::to_string(i) +
+                                         " exceeds #~ stream size");
+            }
+            offset += table_bytes;
         }
     }
 
-    const size_t available_table_bytes = tables_data_.size() - tables_start;
     if (offset > available_table_bytes) {
         throw std::runtime_error("metadata tables exceed #~ stream size");
     }
@@ -269,7 +301,7 @@ void CliMetadata::read_table_rows(TableId id, size_t row_count) {
 
     for (size_t row = 0; row < row_count; ++row) {
         const size_t row_offset = base + row * row_size;
-        if (row_size == 0 || row_offset + row_size > valid_tables_.size()) {
+        if (!safe_row_range(row_offset, row_size, valid_tables_.size())) {
             throw std::runtime_error("metadata row read out of bounds in table 0x" +
                                      std::to_string(table_index));
         }
@@ -755,12 +787,7 @@ std::vector<size_t> CliMetadata::fields_for_type(size_t type_def_index) const {
     const uint32_t end =
         (type_def_index + 1 < type_defs_.size()) ? type_defs_[type_def_index + 1].field_list_index
                                                  : static_cast<uint32_t>(fields_.size() + 1);
-    if (start == 0) {
-        return result;
-    }
-    for (uint32_t i = start; i < end; ++i) {
-        result.push_back(i - 1);
-    }
+    append_rid_list(start, end, static_cast<uint32_t>(fields_.size()), result);
     return result;
 }
 
@@ -773,12 +800,7 @@ std::vector<size_t> CliMetadata::methods_for_type(size_t type_def_index) const {
     const uint32_t end = (type_def_index + 1 < type_defs_.size())
                              ? type_defs_[type_def_index + 1].method_list_index
                              : static_cast<uint32_t>(method_defs_.size() + 1);
-    if (start == 0) {
-        return result;
-    }
-    for (uint32_t i = start; i < end; ++i) {
-        result.push_back(i - 1);
-    }
+    append_rid_list(start, end, static_cast<uint32_t>(method_defs_.size()), result);
     return result;
 }
 
@@ -791,12 +813,7 @@ std::vector<size_t> CliMetadata::params_for_method(size_t method_def_index) cons
     const uint32_t end = (method_def_index + 1 < method_defs_.size())
                              ? method_defs_[method_def_index + 1].param_list_index
                              : static_cast<uint32_t>(params_.size() + 1);
-    if (start == 0) {
-        return result;
-    }
-    for (uint32_t i = start; i < end; ++i) {
-        result.push_back(i - 1);
-    }
+    append_rid_list(start, end, static_cast<uint32_t>(params_.size()), result);
     return result;
 }
 

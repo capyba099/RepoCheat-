@@ -76,6 +76,7 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
             try {
                 decompile_type(out, i, options);
                 out << "\n";
+                out.flush();
             } catch (const std::exception& ex) {
                 out << "// Failed to decompile type #" << i << ": " << ex.what() << "\n\n";
             }
@@ -85,6 +86,11 @@ void Decompiler::decompile_assembly(std::ostream& out, const DecompileOptions& o
 
 void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
                                 const DecompileOptions& options) const {
+    if (type_def_index >= metadata_.type_defs().size()) {
+        out << "// Skipped invalid type index " << type_def_index << "\n";
+        return;
+    }
+
     const auto& type = metadata_.type_defs()[type_def_index];
     const std::string ns = metadata_.get_string(type.type_namespace_index);
     std::string name = metadata_.get_string(type.type_name_index);
@@ -134,8 +140,12 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
             continue;
         }
         try {
-            const uint32_t nested_type = metadata_.nested_classes()[nested_index].nested_class_index - 1;
-            decompile_type(out, nested_type, options);
+            const uint32_t nested_rid = metadata_.nested_classes()[nested_index].nested_class_index;
+            if (nested_rid == 0 || nested_rid > metadata_.type_defs().size()) {
+                out << indent(indent_level + 1) << "// Skipped invalid nested type reference\n";
+                continue;
+            }
+            decompile_type(out, nested_rid - 1, options);
         } catch (const std::exception& ex) {
             out << indent(indent_level + 1) << "// Failed to decompile nested type: " << ex.what() << "\n";
         }
@@ -149,6 +159,10 @@ void Decompiler::decompile_type(std::ostream& out, size_t type_def_index,
 
 std::string Decompiler::decompile_method(size_t method_def_index, size_t type_def_index,
                                          const DecompileOptions& options) const {
+    if (method_def_index >= metadata_.method_defs().size()) {
+        return indent(1) + "// Invalid method index\n";
+    }
+
     const auto& method = metadata_.method_defs()[method_def_index];
     const auto signature = metadata_.decode_method_signature(method.signature_index);
     const auto param_indices = metadata_.params_for_method(method_def_index);
@@ -158,10 +172,13 @@ std::string Decompiler::decompile_method(size_t method_def_index, size_t type_de
     for (size_t i = 0; i < signature.param_types.size(); ++i) {
         std::string param_name = "p" + std::to_string(i);
         if (i < param_indices.size()) {
-            const auto& param = metadata_.params()[param_indices[i]];
-            const std::string explicit_name = metadata_.get_string(param.name_index);
-            if (!explicit_name.empty()) {
-                param_name = explicit_name;
+            const size_t param_index = param_indices[i];
+            if (param_index < metadata_.params().size()) {
+                const auto& param = metadata_.params()[param_index];
+                const std::string explicit_name = metadata_.get_string(param.name_index);
+                if (!explicit_name.empty()) {
+                    param_name = explicit_name;
+                }
             }
         }
         param_names.push_back(param_name);
@@ -186,6 +203,10 @@ std::string Decompiler::decompile_method(size_t method_def_index, size_t type_de
 std::string Decompiler::decompile_method_body(size_t method_def_index, size_t /*type_def_index*/,
                                               const DecompileOptions& options,
                                               const std::vector<std::string>& param_names) const {
+    if (method_def_index >= metadata_.method_defs().size()) {
+        return indent(2) + "// Invalid method index\n";
+    }
+
     const auto& method = metadata_.method_defs()[method_def_index];
     const bool is_static = (method.flags & 0x0010) != 0;
 
