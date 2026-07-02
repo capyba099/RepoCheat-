@@ -1130,16 +1130,6 @@ std::string CliMetadata::get_method_display_name(uint32_t name_index, size_t met
     return format_method_display_name(get_string(name_index), method_index);
 }
 
-bool CliMetadata::should_emit_method(size_t method_def_index) const {
-    if (method_def_index >= method_defs_.size()) {
-        return false;
-    }
-    if (!obfuscated_metadata_) {
-        return true;
-    }
-    return should_emit_obfuscated_method(get_string(method_defs_[method_def_index].name_index));
-}
-
 namespace {
 
 std::string join_qualified_name(const TypeDisplayName& parts) {

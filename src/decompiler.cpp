@@ -168,9 +168,6 @@ void Decompiler::decompile_type_impl(std::ostream& out, size_t type_def_index,
         if (method_index >= metadata_.method_defs().size()) {
             continue;
         }
-        if (!metadata_.should_emit_method(method_index)) {
-            continue;
-        }
         try {
             out << decompile_method(method_index, type_def_index, options);
         } catch (const std::exception& ex) {

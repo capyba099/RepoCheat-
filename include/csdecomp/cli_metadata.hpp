@@ -147,7 +147,6 @@ public:
 
     [[nodiscard]] TypeDisplayName get_type_display_name(size_t type_def_index) const;
     [[nodiscard]] std::string get_method_display_name(uint32_t name_index, size_t method_index) const;
-    [[nodiscard]] bool should_emit_method(size_t method_def_index) const;
     [[nodiscard]] bool obfuscated_metadata() const { return obfuscated_metadata_; }
 
 private:

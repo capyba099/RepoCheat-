@@ -109,24 +109,6 @@ bool is_obfuscated_method_stub_name(const std::string& name) {
     return false;
 }
 
-bool should_emit_obfuscated_method(const std::string& name) {
-    if (name == "Forms" || name == "Linq" || name == "Text" || name == ".ctor" || name == ".cctor") {
-        return true;
-    }
-    if (name.rfind("get_", 0) == 0 || name.rfind("set_", 0) == 0 || name.rfind("add_", 0) == 0 ||
-        name.rfind("remove_", 0) == 0) {
-        return true;
-    }
-    if (name == "Invoke" || name == "Convert" || name == "ConvertBack" || name == "MoveNext" ||
-        name == "RaisePropertyChanged" || name == "InitializeComponent") {
-        return true;
-    }
-    if (!is_obfuscated_method_stub_name(name) && !is_obfuscated_namespace_token(name)) {
-        return true;
-    }
-    return false;
-}
-
 TypeDisplayName split_type_display_name(const std::string& namespace_name,
                                         const std::string& raw_name) {
     TypeDisplayName result;
